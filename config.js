@@ -26,7 +26,7 @@ module.exports = {
   },
 
   // Telefone do Dr. Osmar para notificações
-  OSMAR_PHONE: process.env.OSMAR_PHONE || '5591981018757',
+  OSMAR_PHONE: process.env.OSMAR_PHONE || '5591981001182',
 
   // Identificador do escritório (usado para separar dados no Supabase)
   ESCRITORIO: 'npl',
