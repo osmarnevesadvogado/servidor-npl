@@ -10,6 +10,10 @@ const ia = require('./ia');
 const fluxo = require('./fluxo');
 let audio;
 try { audio = require('./audio'); } catch (e) { console.log('[INIT-NPL] Audio nao disponivel'); }
+let calendar;
+try { calendar = require('./calendar'); console.log('[INIT-NPL] Calendar OK'); } catch (e) { console.log('[INIT-NPL] Calendar nao disponivel:', e.message); }
+let documentos;
+try { documentos = require('./documentos'); console.log('[INIT-NPL] Documentos OK'); } catch (e) { console.log('[INIT-NPL] Documentos nao disponivel:', e.message); }
 
 const app = express();
 app.use(cors());
@@ -154,6 +158,29 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       }
     } catch (e) {
       console.log('[CRM-NPL] Erro ao buscar contexto:', e.message);
+    }
+
+    // Se não é cliente CRM, verificar se é cliente antigo (planilha de processos) pelo nome
+    if (!contexto || contexto.tipo === 'lead') {
+      const nomeLead = leadAtualizado?.nome;
+      if (nomeLead && !nomeLead.startsWith('WhatsApp')) {
+        try {
+          const processos = await db.findClienteProcessoByName(nomeLead);
+          if (processos && processos.length > 0) {
+            console.log(`[CLIENTE-ANTIGO-NPL] ${nomeLead} encontrado na base de processos (${processos.length} processo(s))`);
+            contexto = { tipo: 'cliente_processo', processos };
+
+            // Notificar Dr. Osmar que cliente antigo entrou em contato
+            await whatsapp.notifyHotLead(
+              `CLIENTE EXISTENTE: ${nomeLead}`,
+              phone,
+              `Cliente antigo entrou em contato. Processos: ${processos.map(p => p.numero_processo || p.materia).join(', ')}`
+            );
+          }
+        } catch (e) {
+          console.log('[CLIENTE-ANTIGO-NPL] Erro ao buscar por nome:', e.message);
+        }
+      }
     }
 
     // Gerar e enviar resposta
@@ -504,6 +531,97 @@ app.post('/api/retomar', (req, res) => {
 app.get('/api/metricas', async (req, res) => {
   try {
     res.json(await db.getMetricas());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ===== AGENTE ORGANIZADOR DE DOCUMENTOS =====
+
+// Organizar documentos de um cliente (sob demanda)
+app.post('/api/documentos/organizar', async (req, res) => {
+  try {
+    if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
+
+    const { phone, nome } = req.body;
+    if (!phone || !nome) return res.status(400).json({ error: 'phone e nome obrigatórios' });
+
+    console.log(`[DOCS-NPL] Organização solicitada: ${nome} (${phone})`);
+
+    // Responder imediatamente e processar em background
+    res.json({ ok: true, msg: `Organização iniciada para ${nome}. Você receberá o relatório no WhatsApp.` });
+
+    // Processar em background
+    (async () => {
+      try {
+        const resultado = await documentos.organizarDocumentos(phone, nome);
+        const relatorio = documentos.gerarRelatorioWhatsApp(resultado);
+
+        // Enviar relatório para Dr. Osmar via WhatsApp
+        await whatsapp.sendText(config.OSMAR_PHONE, relatorio);
+        console.log(`[DOCS-NPL] Relatório enviado para ${config.OSMAR_PHONE}`);
+      } catch (e) {
+        console.error('[DOCS-NPL] Erro no processamento:', e.message);
+        await whatsapp.sendText(config.OSMAR_PHONE, `Erro ao organizar documentos de ${nome}: ${e.message}`);
+      }
+    })();
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// Auditoria rápida (sem upload, só verifica o que tem)
+app.get('/api/documentos/auditoria/:phone', async (req, res) => {
+  try {
+    if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
+
+    const phone = req.params.phone;
+    const midias = await documentos.buscarMidiasWhatsApp(phone);
+
+    // Identificar tipos rapidamente (por caption/nome, sem IA vision para ser rápido)
+    const tipos = [];
+    for (const m of midias) {
+      const caption = m.caption || m.fileName || '';
+      if (caption) {
+        const tipo = documentos.identificarDocumento ? 'Outro' : 'Outro';
+        tipos.push(caption);
+      }
+    }
+
+    res.json({
+      phone,
+      totalMidias: midias.length,
+      midias: midias.map(m => ({
+        fileName: m.fileName,
+        caption: m.caption,
+        mimeType: m.mimeType,
+        isImage: m.isImage,
+        isDocument: m.isDocument,
+        timestamp: m.timestamp
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Cobrar documentos faltantes do cliente
+app.post('/api/documentos/cobrar', async (req, res) => {
+  try {
+    if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
+
+    const { phone, nome, auditoria } = req.body;
+    if (!phone || !nome || !auditoria) {
+      return res.status(400).json({ error: 'phone, nome e auditoria obrigatórios' });
+    }
+
+    const msg = documentos.gerarCobrancaDocumentos(auditoria, nome);
+    if (!msg) {
+      return res.json({ ok: true, msg: 'Documentação completa, nada a cobrar.' });
+    }
+
+    await whatsapp.sendText(phone, msg);
+    res.json({ ok: true, msg: 'Cobrança enviada ao cliente.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
