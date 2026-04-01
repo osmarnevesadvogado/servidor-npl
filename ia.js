@@ -290,10 +290,10 @@ function buildFichaLead(lead, history, contexto) {
 }
 
 // ===== BUSCAR HORÁRIOS DO CALENDÁRIO =====
-async function buscarHorarios() {
+async function buscarHorarios(phone) {
   try {
     const calendar = require('./calendar');
-    const { texto, slots } = await calendar.sugerirHorarios(3);
+    const { texto, slots } = await calendar.sugerirHorarios(3, phone || null);
     if (slots.length > 0) {
       return slots.map(s => `- ${s.label}`).join('\n');
     }
@@ -333,10 +333,10 @@ function buildRecentHistory(history) {
 }
 
 // ===== GERAR RESPOSTA =====
-async function generateResponse(history, userMessage, conversaId, lead, contexto) {
+async function generateResponse(history, userMessage, conversaId, lead, contexto, phone) {
   const recentHistory = buildRecentHistory(history);
   const fichaLead = buildFichaLead(lead, history, contexto);
-  const horariosTexto = await buscarHorarios();
+  const horariosTexto = await buscarHorarios(phone);
 
   let agendaSection = '';
   if (horariosTexto) {
