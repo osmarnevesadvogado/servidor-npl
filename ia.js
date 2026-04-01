@@ -159,6 +159,45 @@ function buildFichaLead(lead, history, contexto) {
     linhas.push(`- Se perguntar sobre seu caso, informe o status geral`);
     linhas.push(`- Se tiver cobranca atrasada, NAO mencione diretamente. Apenas se o CLIENTE perguntar sobre financeiro, diga gentilmente que existem pendencias`);
     linhas.push(`- Se quiser agendar nova consulta, prossiga normalmente com a agenda`);
+  } else if (contexto && contexto.tipo === 'cliente_processo') {
+    // === CLIENTE ANTIGO (identificado pela planilha de processos) ===
+    const proc = contexto.processos[0];
+    linhas.push(`ATENCAO: Esta pessoa foi IDENTIFICADA como CLIENTE EXISTENTE do escritorio!`);
+    linhas.push(`- Nome encontrado: ${proc.nome_cliente}`);
+    linhas.push(`- Processos encontrados: ${contexto.processos.length}`);
+
+    linhas.push(`\nDADOS DOS PROCESSOS (use para informar o cliente):`);
+    contexto.processos.forEach((p, i) => {
+      linhas.push(`\n  PROCESSO ${i + 1}:`);
+      linhas.push(`  - Materia: ${p.materia || p.disciplina || 'Trabalhista'}`);
+      if (p.numero_processo) linhas.push(`  - Numero: ${p.numero_processo}`);
+      if (p.parte_contraria) linhas.push(`  - Contra: ${p.parte_contraria}`);
+      linhas.push(`  - Fase: ${p.status_fase.replace(/_/g, ' ')}`);
+      if (p.ultima_movimentacao && p.ultima_movimentacao !== 'X' && p.ultima_movimentacao !== 'x') {
+        linhas.push(`  - Ultima movimentacao: ${p.ultima_movimentacao}`);
+      }
+      if (p.proxima_audiencia && p.proxima_audiencia !== 'X' && p.proxima_audiencia !== 'x') {
+        linhas.push(`  - Proxima audiencia: ${p.proxima_audiencia}`);
+      }
+      if (p.prazos_aberto && p.prazos_aberto !== 'X' && p.prazos_aberto !== 'x') {
+        linhas.push(`  - Prazos em aberto: ${p.prazos_aberto}`);
+      }
+      if (p.local_tribunal) linhas.push(`  - Tribunal: ${p.local_tribunal}`);
+    });
+
+    linhas.push(`\nCOMPORTAMENTO OBRIGATORIO COM CLIENTE EXISTENTE:`);
+    linhas.push(`- Cumprimente pelo nome de forma acolhedora`);
+    linhas.push(`- Informe que voce identificou que ele(a) ja e cliente do escritorio`);
+    linhas.push(`- Compartilhe as informacoes que voce tem: ultima movimentacao, proxima audiencia (se houver), e fase atual`);
+    linhas.push(`- Se o cliente perguntar detalhes juridicos ou duvidas sobre estrategia do caso, diga que vai repassar aos advogados responsaveis para entrarem em contato`);
+    linhas.push(`- NAO invente informacoes. Compartilhe SOMENTE o que esta listado acima nos DADOS DOS PROCESSOS`);
+    linhas.push(`- Se for um assunto NOVO (nao relacionado ao processo existente), trate como lead novo e faca a triagem normalmente`);
+    linhas.push(`- Tom acolhedor e profissional`);
+
+    linhas.push(`\nEXEMPLO DE RESPOSTA:`);
+    linhas.push(`"[Nome], que bom falar com voce! Vi aqui que voce ja e cliente do escritorio NPLADVS. Sobre o seu processo de [materia] contra [parte contraria], a ultima movimentacao foi [info]. [Se tiver audiencia: Sua proxima audiencia esta marcada para [data/info].] Para duvidas mais detalhadas sobre o caso, vou pedir para os advogados responsaveis entrarem em contato. Pode ficar tranquilo(a)!"`);
+
+    linhas.push(`\nPROXIMO PASSO: Informar os dados do processo que voce tem. Para duvidas juridicas, encaminhar aos advogados.`);
   } else {
     // Lead normal (nao e cliente)
     if (lead && lead.nome && !lead.nome.startsWith('WhatsApp')) {
@@ -217,7 +256,7 @@ function buildFichaLead(lead, history, contexto) {
   const triagemCompleta = temNome && temTempo && temCarteira && temPrazo;
   const triagemMinima = temNome && (temTempo || temPrazo); // minimo para avaliar viabilidade
 
-  if (!(contexto && contexto.tipo === 'cliente')) {
+  if (!(contexto && (contexto.tipo === 'cliente' || contexto.tipo === 'cliente_processo'))) {
     linhas.push(`\nTRIAGEM:`);
     if (triagemItens.length > 0) {
       linhas.push(`- Ja coletado: ${triagemItens.join(', ')}`);
@@ -230,6 +269,8 @@ function buildFichaLead(lead, history, contexto) {
   // Proximo passo
   if (contexto && contexto.tipo === 'cliente') {
     linhas.push(`\nPROXIMO PASSO: E CLIENTE. Atenda conforme o pedido. Se quiser agendar, ofereca horarios.`);
+  } else if (contexto && contexto.tipo === 'cliente_processo') {
+    // Proximo passo ja foi definido no bloco cliente_processo acima, nao sobrescrever
   } else {
     let proximoPasso;
     if (!temNome) {
