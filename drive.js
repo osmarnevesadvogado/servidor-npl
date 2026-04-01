@@ -27,8 +27,93 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
-// ID da pasta raiz no Google Drive (configurar no .env)
-const PASTA_RAIZ_ID = process.env.GOOGLE_DRIVE_PASTA_RAIZ || null;
+// ID da pasta raiz no Google Drive — pasta principal do escritório
+const PASTA_RAIZ_ID = process.env.GOOGLE_DRIVE_PASTA_RAIZ || '1AxSr25WaWtsC38-eZBPwdBiqKXdemiMW';
+
+// ===== MAPEAMENTO: MATÉRIA → ID DA PASTA NO DRIVE =====
+// Estrutura: Pasta Raiz → Matéria → Cliente → Documentos
+const MATERIAS = {
+  'ACIDENTE DE TRABALHO':          '1vW6Y3mCrb-ZRLUHUT-mfudmYQTFTTb4J',
+  'ASSÉDIO':                       '1vGI-aiG0s8xMdsuboluPeA9Jj7ejAF8-',
+  'DOENÇA DO TRABALHO':            '1IEmxnZC-inaY3Ob6Dy8T3PDep2ZRmhM7',
+  'EMPREGADA DOMESTICA':           '1f9gKjUl84Y18RO8HOKwV6OEwygCsc4Bj',
+  'ESTABILIDADE GRAVIDEZ':         '1DA2p1y6AZ3ZkyA0nhdAnxDLpKmSuKVDe',
+  'ESTAGIÁRIO':                    '1I_w5Hk_VrPKdlusud40eqH1Hi5e_G1HW',
+  'HORAS EXTRAS E ACÚMULO DE FUNCAO': '1fQ-T0drYOwR6MpFdWGTNtGIbLXZJV1Um',
+  'INSALUBRIDADE':                 '1ThANKDXMQq7LWJel6PjJgt3D1CFB0x0e',
+  'JORNALISTA/REPORTER':           '1HFQ6ScxrLIO54c7n8kVHUNKbya-bBCSE',
+  'MORTE ACIDENTE DE TRABALHO':    '1H3OSl6DpmuGOmq4rhlIknIVP6_DTd2Ue',
+  'NÃO PAGAMENTO DE VERBAS':       '1PW8dUsRnYrL7NlRqZKHefIzKP7QoKnXN',
+  'PEJOTIZAÇÃO':                   '1JHbk97LB2QhSxg2SN_ghTlBkGJPLZJ_b',
+  'PERICULOSIDADE':                '1uj62gfGhTFkgKNdbN3gJ0YA8YfpDGRTp',
+  'RECONHECIMENTO DE VÍNCULO':     '1m_nzQ49w9jg34NBzIHzszs-5ulWEFiYQ',
+  'RECURSO ORDINARIO':             '1k4aemdm2bPeofinso5Naei5ZCQVKtCxm',
+  'RESCISÃO INDIRETA':             '1-ksFgCX2CuUNENh94zBAxjPYn6TYuOyN',
+  'REVERSÃO DE JUSTA CAUSA':       '1qQ_JrRqUDODi-Df_YB5HcUDzLan1ZLOb',
+  'RURAL':                         '1-hMpivJ1XPU1tYzgtqx0fl9q9E0ImP5W',
+  'SEGURO DESEMPREGO':             '1jJOinLzttZU32VYOj5avFOg0nkRDGJFB'
+};
+
+// Aliases para mapear tese_interesse do lead → nome da pasta no Drive
+const MATERIA_ALIASES = {
+  'trabalhista':                'NÃO PAGAMENTO DE VERBAS',
+  'sem carteira':               'RECONHECIMENTO DE VÍNCULO',
+  'reconhecimento de vinculo':  'RECONHECIMENTO DE VÍNCULO',
+  'vinculo empregaticio':       'RECONHECIMENTO DE VÍNCULO',
+  'verbas rescisorias':         'NÃO PAGAMENTO DE VERBAS',
+  'verbas rescisórias':         'NÃO PAGAMENTO DE VERBAS',
+  'nao pagamento':              'NÃO PAGAMENTO DE VERBAS',
+  'rescisao indireta':          'RESCISÃO INDIRETA',
+  'rescisão indireta':          'RESCISÃO INDIRETA',
+  'acidente de trabalho':       'ACIDENTE DE TRABALHO',
+  'acidente trabalho':          'ACIDENTE DE TRABALHO',
+  'doenca do trabalho':         'DOENÇA DO TRABALHO',
+  'doença do trabalho':         'DOENÇA DO TRABALHO',
+  'assedio':                    'ASSÉDIO',
+  'assédio':                    'ASSÉDIO',
+  'assedio moral':              'ASSÉDIO',
+  'horas extras':               'HORAS EXTRAS E ACÚMULO DE FUNCAO',
+  'acumulo de funcao':          'HORAS EXTRAS E ACÚMULO DE FUNCAO',
+  'insalubridade':              'INSALUBRIDADE',
+  'periculosidade':             'PERICULOSIDADE',
+  'pejotizacao':                'PEJOTIZAÇÃO',
+  'pejotização':                'PEJOTIZAÇÃO',
+  'justa causa':                'REVERSÃO DE JUSTA CAUSA',
+  'reversao justa causa':       'REVERSÃO DE JUSTA CAUSA',
+  'domestica':                  'EMPREGADA DOMESTICA',
+  'empregada domestica':        'EMPREGADA DOMESTICA',
+  'gravidez':                   'ESTABILIDADE GRAVIDEZ',
+  'estabilidade':               'ESTABILIDADE GRAVIDEZ',
+  'estagiario':                 'ESTAGIÁRIO',
+  'rural':                      'RURAL',
+  'seguro desemprego':          'SEGURO DESEMPREGO',
+  'morte':                      'MORTE ACIDENTE DE TRABALHO',
+  'recurso':                    'RECURSO ORDINARIO'
+};
+
+// Encontrar a pasta da matéria a partir da tese_interesse
+function encontrarPastaMateria(teseInteresse) {
+  if (!teseInteresse) return null;
+  const tese = teseInteresse.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+  // Tentar match direto nos aliases
+  for (const [alias, materia] of Object.entries(MATERIA_ALIASES)) {
+    const aliasNorm = alias.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (tese.includes(aliasNorm)) {
+      return { nome: materia, id: MATERIAS[materia] };
+    }
+  }
+
+  // Tentar match direto no nome da matéria
+  for (const [materia, id] of Object.entries(MATERIAS)) {
+    const materiaNorm = materia.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (tese.includes(materiaNorm) || materiaNorm.includes(tese)) {
+      return { nome: materia, id };
+    }
+  }
+
+  return null;
+};
 
 // Buscar ou criar pasta por nome dentro de uma pasta pai
 async function getOrCreateFolder(nome, pastaParentId = null) {
@@ -135,17 +220,36 @@ async function fileExists(nome, pastaId) {
   }
 }
 
-// Criar estrutura de pastas: NPLADVS Documentos / [Nome do Cliente] /
-async function criarEstruturaPastas(nomeCliente) {
-  // Pasta raiz: NPLADVS Documentos
-  const pastaRaiz = await getOrCreateFolder('NPLADVS Documentos');
-  if (!pastaRaiz) return null;
+// Criar estrutura: Pasta Raiz → Matéria → Cliente
+// Se não encontrar matéria, cria direto na raiz
+async function criarEstruturaPastas(nomeCliente, teseInteresse = null) {
+  let pastaParent = null;
 
-  // Pasta do cliente
-  const pastaCliente = await getOrCreateFolder(nomeCliente, pastaRaiz.id);
+  // Tentar encontrar pasta da matéria
+  const materia = encontrarPastaMateria(teseInteresse);
+  if (materia && materia.id) {
+    pastaParent = { id: materia.id, name: materia.nome };
+    console.log(`[DRIVE-NPL] Matéria encontrada: ${materia.nome}`);
+  } else if (PASTA_RAIZ_ID) {
+    // Se não encontrou matéria, usa a pasta raiz
+    pastaParent = { id: PASTA_RAIZ_ID, name: 'RAIZ' };
+    console.log(`[DRIVE-NPL] Matéria não identificada para "${teseInteresse}", usando pasta raiz`);
+  } else {
+    console.error('[DRIVE-NPL] Sem pasta raiz configurada');
+    return null;
+  }
+
+  // Criar pasta do cliente dentro da matéria (ou raiz)
+  const nomeClienteUpper = nomeCliente.toUpperCase().trim();
+  const pastaCliente = await getOrCreateFolder(nomeClienteUpper, pastaParent.id);
   if (!pastaCliente) return null;
 
-  return { raiz: pastaRaiz, cliente: pastaCliente };
+  return { materia: pastaParent, cliente: pastaCliente };
+}
+
+// Listar todas as matérias disponíveis
+function listarMaterias() {
+  return Object.keys(MATERIAS);
 }
 
 module.exports = {
@@ -155,5 +259,9 @@ module.exports = {
   listFiles,
   fileExists,
   criarEstruturaPastas,
-  PASTA_RAIZ_ID
+  encontrarPastaMateria,
+  listarMaterias,
+  PASTA_RAIZ_ID,
+  MATERIAS,
+  MATERIA_ALIASES
 };
