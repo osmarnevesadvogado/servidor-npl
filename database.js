@@ -268,6 +268,46 @@ async function createTarefa(tarefa) {
   }
 }
 
+// ===== CLIENTES ANTIGOS (busca por nome na planilha importada) =====
+
+async function findClienteProcessoByName(nome) {
+  if (!nome || nome.length < 3) return null;
+
+  // Normalizar: minúsculo, sem acentos, sem espaços extras
+  const normalizado = nome
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+
+  // Busca exata pelo nome normalizado
+  const { data: exato } = await supabase
+    .from('npl_clientes_processos')
+    .select('*')
+    .eq('nome_normalizado', normalizado);
+
+  if (exato && exato.length > 0) return exato;
+
+  // Busca parcial: cada palavra do nome buscada com ilike
+  const palavras = normalizado.split(' ').filter(p => p.length > 2);
+  if (palavras.length === 0) return null;
+
+  // Buscar por primeiro + último nome (mais confiável)
+  const primeiro = palavras[0];
+  const ultimo = palavras[palavras.length - 1];
+
+  const { data: parcial } = await supabase
+    .from('npl_clientes_processos')
+    .select('*')
+    .ilike('nome_normalizado', `%${primeiro}%`)
+    .ilike('nome_normalizado', `%${ultimo}%`);
+
+  if (parcial && parcial.length > 0 && parcial.length <= 3) return parcial;
+
+  return null;
+}
+
 // ===== CLIENTES (busca por telefone) =====
 
 async function findClienteByPhone(phone) {
@@ -421,6 +461,7 @@ module.exports = {
   getConversaMensagens,
   getMetricas,
   createTarefa,
+  findClienteProcessoByName,
   findClienteByPhone,
   findCasoByCliente,
   getContextoCompleto,
