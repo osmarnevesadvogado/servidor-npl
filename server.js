@@ -816,9 +816,9 @@ app.get('/api/conversas/:id/mensagens', async (req, res) => {
 
 app.post('/api/enviar', async (req, res) => {
   try {
-    const { phone, message, conversaId } = req.body;
+    const { phone, message, conversaId, usuario_nome } = req.body;
     if (!phone || !message) return res.status(400).json({ error: 'phone e message obrigatorios' });
-    if (conversaId) await db.saveMessage(conversaId, 'assistant', message, { manual: true });
+    if (conversaId) await db.saveMessage(conversaId, 'assistant', message, { manual: true, usuario_nome: usuario_nome || null });
     const result = await whatsapp.sendText(phone, message);
     res.json({ ok: true, result });
   } catch (e) {
