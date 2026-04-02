@@ -19,7 +19,9 @@ function markBotSent(phone) {
 function wasBotRecentSend(phone) {
   const ts = recentBotSends.get(cleanPhone(phone));
   if (!ts) return false;
-  return (Date.now() - ts) < 30000;
+  // Janela de 5 segundos para filtrar apenas o echo do bot (Z-API ecoa em ~1-2s)
+  // Antes era 30s e bloqueava mensagens manuais do advogado
+  return (Date.now() - ts) < 5000;
 }
 
 async function sendText(phone, text) {
