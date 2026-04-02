@@ -532,12 +532,72 @@ async function encontrarSlot(textoLead, phoneAtual = null) {
   return candidatos.length > 0 ? candidatos[0] : slots[0];
 }
 
+// ===== BUSCAR CONSULTAS DO DIA (para lembretes) =====
+async function getConsultasDoDia() {
+  const calendar = getCalendarClient();
+  if (!calendar) return [];
+
+  try {
+    const belemAgora = agoraBelem();
+    const ano = belemAgora.getUTCFullYear();
+    const mes = belemAgora.getUTCMonth();
+    const dia = belemAgora.getUTCDate();
+
+    const inicioDia = criarDataBelem(ano, mes, dia, 0, 0);
+    const fimDia = criarDataBelem(ano, mes, dia, 23, 59);
+
+    const response = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: inicioDia.toISOString(),
+      timeMax: fimDia.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      timeZone: TIMEZONE
+    });
+
+    const eventos = (response.data.items || []).map(ev => {
+      // Extrair telefone da descrição
+      const descricao = ev.description || '';
+      const phoneMatch = descricao.match(/Telefone:\s*(\d+)/);
+      const telefone = phoneMatch ? phoneMatch[1] : null;
+
+      // Extrair nome do summary: "Consulta Trabalhista - Nome (Colaboradora)"
+      const summaryMatch = (ev.summary || '').match(/Consulta.*?-\s*(.+?)\s*\(/);
+      const nome = summaryMatch ? summaryMatch[1].trim() : ev.summary;
+
+      // Extrair colaboradora
+      const colabMatch = (ev.summary || '').match(/\(([^)]+)\)/);
+      const colaboradora = colabMatch ? colabMatch[1] : '';
+
+      const inicio = new Date(ev.start.dateTime || ev.start.date);
+
+      return {
+        id: ev.id,
+        nome,
+        telefone,
+        colaboradora,
+        inicio,
+        inicioFormatado: formatarSlotDate(inicio),
+        summary: ev.summary
+      };
+    });
+
+    console.log(`[CALENDAR-NPL] ${eventos.length} consulta(s) hoje`);
+    return eventos;
+  } catch (e) {
+    console.error('[CALENDAR-NPL] Erro ao buscar consultas do dia:', e.message);
+    return [];
+  }
+}
+
 module.exports = {
   getHorariosDisponiveis,
   sugerirHorarios,
   criarConsulta,
   encontrarSlot,
+  getConsultasDoDia,
   formatarSlot: formatarSlotDate,
   reservarSlot,
+  agoraBelem,
   COLABORADORAS
 };
