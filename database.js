@@ -281,6 +281,10 @@ async function findClienteProcessoByName(nome) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ');
 
+  // Exigir pelo menos 2 palavras significativas (nome + sobrenome)
+  const palavras = normalizado.split(' ').filter(p => p.length > 2);
+  if (palavras.length < 2) return null;
+
   // Busca exata pelo nome normalizado
   const { data: exato } = await supabase
     .from('npl_clientes_processos')
@@ -289,21 +293,52 @@ async function findClienteProcessoByName(nome) {
 
   if (exato && exato.length > 0) return exato;
 
-  // Busca parcial: cada palavra do nome buscada com ilike
-  const palavras = normalizado.split(' ').filter(p => p.length > 2);
-  if (palavras.length === 0) return null;
+  // Nomes muito comuns — busca parcial não é confiável com só 2 palavras
+  const NOMES_COMUNS = [
+    'maria', 'jose', 'ana', 'joao', 'francisco', 'antonio', 'carlos', 'paulo',
+    'pedro', 'lucas', 'marcos', 'luiz', 'rafael', 'daniel', 'marcelo', 'bruno',
+    'felipe', 'rodrigo', 'fabio', 'andre', 'fernando', 'jorge', 'manoel', 'raimundo'
+  ];
+  const SOBRENOMES_COMUNS = [
+    'silva', 'santos', 'oliveira', 'souza', 'lima', 'pereira', 'ferreira',
+    'costa', 'rodrigues', 'almeida', 'nascimento', 'araujo', 'melo', 'barbosa',
+    'ribeiro', 'martins', 'carvalho', 'gomes', 'rocha', 'dias', 'monteiro',
+    'mendes', 'barros', 'freitas', 'moreira', 'cardoso', 'batista', 'campos'
+  ];
 
-  // Buscar por primeiro + último nome (mais confiável)
   const primeiro = palavras[0];
   const ultimo = palavras[palavras.length - 1];
 
+  // Se tem só 2 palavras e AMBAS são comuns, a busca parcial é muito arriscada
+  if (palavras.length <= 2) {
+    const primeiroComum = NOMES_COMUNS.includes(primeiro);
+    const ultimoComum = SOBRENOMES_COMUNS.includes(ultimo);
+    if (primeiroComum && ultimoComum) {
+      console.log(`[DB-NPL] Nome muito comum "${normalizado}", pulando busca parcial`);
+      return null;
+    }
+  }
+
+  // Busca parcial: primeiro + último nome como palavras (não pedaços)
+  // Usar espaços ao redor para evitar match parcial (ex: "ana" não bater em "mariana")
   const { data: parcial } = await supabase
     .from('npl_clientes_processos')
     .select('*')
-    .ilike('nome_normalizado', `%${primeiro}%`)
-    .ilike('nome_normalizado', `%${ultimo}%`);
+    .or(`nome_normalizado.ilike.${primeiro} %,nome_normalizado.ilike.% ${primeiro} %,nome_normalizado.ilike.% ${primeiro}`)
+    .or(`nome_normalizado.ilike.${ultimo} %,nome_normalizado.ilike.% ${ultimo} %,nome_normalizado.ilike.% ${ultimo}`);
 
-  if (parcial && parcial.length > 0 && parcial.length <= 3) return parcial;
+  // Só confiar se achou EXATAMENTE 1 resultado (sem ambiguidade)
+  if (parcial && parcial.length === 1) return parcial;
+
+  // Se achou mais de 1, verificar se algum é match muito próximo (>80% das palavras)
+  if (parcial && parcial.length > 1 && parcial.length <= 3) {
+    const melhorMatch = parcial.filter(p => {
+      const nomeBanco = (p.nome_normalizado || '').split(' ').filter(w => w.length > 2);
+      const palavrasMatch = palavras.filter(pl => nomeBanco.includes(pl));
+      return palavrasMatch.length >= Math.max(palavras.length, nomeBanco.length) * 0.7;
+    });
+    if (melhorMatch.length === 1) return melhorMatch;
+  }
 
   return null;
 }
