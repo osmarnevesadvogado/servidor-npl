@@ -43,7 +43,7 @@ function getCalendarClient() {
 const CALENDAR_ID = config.GOOGLE_CALENDAR_ID;
 
 // Horário comercial (em horário de Belém) — COM intervalo de almoço
-const HORARIOS_MANHA = { inicio: 8, fim: 12 };  // 08h às 12h
+const HORARIOS_MANHA = { inicio: 9, fim: 12 };  // 09h às 12h
 const HORARIOS_TARDE = { inicio: 14, fim: 17 }; // 14h às 17h
 const DURACAO_CONSULTA = 60; // minutos
 const TIMEZONE = 'America/Belem';
@@ -51,22 +51,48 @@ const UTC_OFFSET = -3; // Belém = UTC-3
 
 // ===== RODÍZIO DE COLABORADORAS =====
 const COLABORADORAS = ['Dra. Luma', 'Dra. Sophia', 'Luiza'];
-let rodizioIndex = 0; // Índice atual do rodízio (em memória)
 
-function getProximaColaboradora() {
-  const colaboradora = COLABORADORAS[rodizioIndex % COLABORADORAS.length];
-  rodizioIndex++;
-  return colaboradora;
+// Disponibilidade da Luiza (estagiária, 4h/dia):
+// Seg, Qua, Qui → manhã (9h-12h)
+// Ter, Sex → tarde (14h-17h)
+const LUIZA_DISPONIBILIDADE = {
+  1: 'manha',  // segunda
+  2: 'tarde',  // terça
+  3: 'manha',  // quarta
+  4: 'manha',  // quinta
+  5: 'tarde'   // sexta
+};
+
+// Verificar se a Luiza está disponível num determinado horário
+function luizaDisponivel(dataHora) {
+  const belem = new Date(dataHora.getTime() + (UTC_OFFSET * 60 * 60 * 1000));
+  const diaSemana = belem.getUTCDay(); // 0=dom, 1=seg...
+  const hora = belem.getUTCHours();
+
+  const turno = LUIZA_DISPONIBILIDADE[diaSemana];
+  if (!turno) return false; // fim de semana
+
+  if (turno === 'manha') return hora >= HORARIOS_MANHA.inicio && hora < HORARIOS_MANHA.fim;
+  if (turno === 'tarde') return hora >= HORARIOS_TARDE.inicio && hora < HORARIOS_TARDE.fim;
+  return false;
 }
 
-// Determinar colaboradora com base nos eventos existentes (para manter equilíbrio)
-function determinarColaboradora(eventosExistentes) {
+// Determinar colaboradora com base nos eventos existentes e horário do slot
+function determinarColaboradora(eventosExistentes, dataHoraSlot) {
+  // Filtrar colaboradoras disponíveis para este horário
+  let candidatas = [...COLABORADORAS];
+  if (dataHoraSlot && !luizaDisponivel(dataHoraSlot)) {
+    candidatas = candidatas.filter(c => c !== 'Luiza');
+  }
+
+  if (candidatas.length === 0) candidatas = ['Dra. Luma', 'Dra. Sophia'];
+
   // Contar quantas consultas cada colaboradora já tem no período
   const contagem = {};
-  COLABORADORAS.forEach(c => contagem[c] = 0);
+  candidatas.forEach(c => contagem[c] = 0);
 
   for (const ev of eventosExistentes) {
-    for (const c of COLABORADORAS) {
+    for (const c of candidatas) {
       if (ev.summary && ev.summary.includes(c)) {
         contagem[c]++;
         break;
@@ -76,15 +102,15 @@ function determinarColaboradora(eventosExistentes) {
 
   // Retornar a que tem menos consultas agendadas
   let menor = Infinity;
-  let escolhida = COLABORADORAS[0];
-  for (const c of COLABORADORAS) {
+  let escolhida = candidatas[0];
+  for (const c of candidatas) {
     if (contagem[c] < menor) {
       menor = contagem[c];
       escolhida = c;
     }
   }
 
-  console.log(`[CALENDAR-NPL] Rodízio: ${JSON.stringify(contagem)} -> ${escolhida}`);
+  console.log(`[CALENDAR-NPL] Rodízio: ${JSON.stringify(contagem)} -> ${escolhida}${dataHoraSlot && !luizaDisponivel(dataHoraSlot) ? ' (Luiza indisponível)' : ''}`);
   return escolhida;
 }
 
@@ -411,7 +437,7 @@ async function criarConsulta(nome, telefone, email, dataHora, formato = 'online'
       console.log('[CALENDAR-NPL] Erro ao buscar rodízio:', e.message);
     }
 
-    const colaboradora = determinarColaboradora(eventosParaRodizio);
+    const colaboradora = determinarColaboradora(eventosParaRodizio, inicio);
 
     const descricao = [
       `Consulta Trabalhista - ${nome}`,
