@@ -3,6 +3,8 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
+let aprendizado;
+try { aprendizado = require('./aprendizado'); } catch (e) { console.log('[IA-NPL] Modulo aprendizado nao disponivel'); }
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
@@ -378,9 +380,21 @@ async function generateResponse(history, userMessage, conversaId, lead, contexto
 
   const systemPrompt = SYSTEM_PROMPT_BASE;
 
+  // Buscar lições aprendidas de conversas anteriores
+  let licoesTexto = '';
+  if (aprendizado) {
+    try {
+      const licoes = await aprendizado.buscarLicoesRelevantes('triagem', 5);
+      licoesTexto = aprendizado.formatarLicoesParaPrompt(licoes);
+    } catch (e) {
+      console.log('[IA-NPL] Erro ao buscar licoes:', e.message);
+    }
+  }
+
   const fichaCompleta = `===== FICHA DO LEAD (CONSULTE ANTES DE RESPONDER) =====
 ${fichaLead}
 ${agendaSection}
+${licoesTexto}
 =========================
 
 Mensagem do lead: "${userMessage}"
