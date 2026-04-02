@@ -238,8 +238,13 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     const reply = ia.trimResponse(rawReply);
     await db.saveMessage(conversa.id, 'assistant', reply);
 
-    // Se Laura confirmou agendamento ("Agendado!"), criar evento no Google Calendar
-    if (calendar && reply.toLowerCase().includes('agendado')) {
+    // Se Laura confirmou agendamento, criar evento no Google Calendar
+    const replyLower = reply.toLowerCase();
+    const agendouConsulta = replyLower.includes('agendado') || replyLower.includes('agendada') ||
+      replyLower.includes('consulta marcada') || replyLower.includes('confirmado') ||
+      replyLower.includes('reservado') || replyLower.includes('horário confirmado') ||
+      (replyLower.includes('consulta') && (replyLower.includes('dia ') || replyLower.includes('às ')));
+    if (calendar && agendouConsulta) {
       try {
         const slot = await calendar.encontrarSlot(combinedText, phone);
         if (slot) {
@@ -248,7 +253,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
           const resultado = await calendar.criarConsulta(nome, phone, email, slot.inicio, 'online');
           if (resultado) {
             console.log(`[CALENDAR-NPL] Consulta CRIADA: ${nome} em ${resultado.inicio} com ${resultado.colaboradora}`);
-            await db.trackEvent(conversa.id, lead?.id, 'consulta_agendada', `${resultado.inicio} - ${resultado.colaboradora}`);
+            try {
+              await db.trackEvent(conversa.id, lead?.id, 'consulta_agendada', `${resultado.inicio} - ${resultado.colaboradora}`);
+            } catch (e) {
+              console.log('[TRACK-NPL] Erro ao rastrear evento (nao bloqueante):', e.message);
+            }
 
             // Criar tarefa no CRM para a consulta agendada
             try {
@@ -284,6 +293,35 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
               phone,
               `${resultado.inicio} com ${resultado.colaboradora}. Formato: online.`
             );
+
+            // Enviar confirmação detalhada ao lead (texto + áudio)
+            try {
+              const msgConfirmacao = `${nome}, sua consulta foi confirmada!\n\n` +
+                `📅 Data: ${resultado.inicio}\n` +
+                `👩‍⚖️ Advogada: ${resultado.colaboradora}\n` +
+                `💻 Formato: Online (o link será enviado antes da reunião)\n\n` +
+                `Escritório NPLADVS - Especializado em Direitos Trabalhistas.\n` +
+                `Qualquer dúvida, estou à disposição!`;
+
+              await whatsapp.sendText(phone, msgConfirmacao);
+              await db.saveMessage(conversa.id, 'assistant', msgConfirmacao);
+              console.log(`[CONFIRM-NPL] Confirmação enviada para ${nome}`);
+
+              // Enviar áudio de confirmação
+              if (audio) {
+                const audioConfirm = `${nome}, aqui é a Laura do escritório NPLADVS. ` +
+                  `Sua consulta trabalhista foi confirmada para ${resultado.inicio} ` +
+                  `com ${resultado.colaboradora}. A consulta será online. ` +
+                  `Qualquer dúvida, é só me chamar aqui. Até lá!`;
+                const audioBase64 = await audio.gerarAudio(audioConfirm);
+                if (audioBase64) {
+                  await whatsapp.sendAudio(phone, audioBase64);
+                  console.log(`[CONFIRM-NPL] Áudio de confirmação enviado para ${nome}`);
+                }
+              }
+            } catch (e) {
+              console.log('[CONFIRM-NPL] Erro ao enviar confirmação:', e.message);
+            }
           } else {
             console.log('[CALENDAR-NPL] Falha ao criar evento (calendar retornou null)');
           }
@@ -440,6 +478,98 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 setTimeout(() => checkFollowUps(), 60 * 1000);
+
+// ===== LEMBRETES DE CONSULTA =====
+// Envia lembrete no dia da consulta às 08h (áudio) e 30min antes (texto)
+const lembretesEnviados = new Set(); // evitar duplicatas: "tipo_eventId"
+
+async function checkLembretesConsulta() {
+  if (!calendar) return;
+  try {
+    const consultas = await calendar.getConsultasDoDia();
+    if (consultas.length === 0) return;
+
+    const belemAgora = calendar.agoraBelem();
+    const horaAtual = belemAgora.getUTCHours();
+    const minAtual = belemAgora.getUTCMinutes();
+
+    for (const consulta of consultas) {
+      if (!consulta.telefone) continue;
+
+      const chaveMatinal = `matinal_${consulta.id}`;
+      const chave30min = `30min_${consulta.id}`;
+
+      // Lembrete matinal às 08h (áudio)
+      if (horaAtual === 8 && minAtual < 15 && !lembretesEnviados.has(chaveMatinal)) {
+        lembretesEnviados.add(chaveMatinal);
+        try {
+          const msgTexto = `Bom dia, ${consulta.nome}! Aqui é a Laura do escritório NPLADVS. ` +
+            `Passando para lembrar que hoje você tem consulta trabalhista às ${consulta.inicioFormatado} ` +
+            `com ${consulta.colaboradora}. A consulta será online. ` +
+            `Nos vemos mais tarde!`;
+
+          // Enviar como áudio
+          if (audio) {
+            const audioBase64 = await audio.gerarAudio(msgTexto);
+            if (audioBase64) {
+              await whatsapp.sendAudio(consulta.telefone, audioBase64);
+              console.log(`[LEMBRETE-NPL] Áudio matinal enviado para ${consulta.nome} (${consulta.telefone})`);
+            } else {
+              await whatsapp.sendText(consulta.telefone, msgTexto);
+            }
+          } else {
+            await whatsapp.sendText(consulta.telefone, msgTexto);
+          }
+          console.log(`[LEMBRETE-NPL] Lembrete matinal (08h) para ${consulta.nome}`);
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro lembrete matinal ${consulta.nome}:`, e.message);
+        }
+      }
+
+      // Lembrete 30min antes (texto)
+      const inicioConsulta = consulta.inicio.getTime();
+      const agora = Date.now();
+      const minFaltando = (inicioConsulta - agora) / (1000 * 60);
+
+      if (minFaltando > 0 && minFaltando <= 35 && !lembretesEnviados.has(chave30min)) {
+        lembretesEnviados.add(chave30min);
+        try {
+          const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${consulta.colaboradora} ` +
+            `começa em 30 minutos! 🕐\n\n` +
+            `O link para a reunião online será enviado em instantes.\n\n` +
+            `Escritório NPLADVS - Estamos te aguardando!`;
+
+          await whatsapp.sendText(consulta.telefone, msgLembrete);
+          console.log(`[LEMBRETE-NPL] Lembrete 30min enviado para ${consulta.nome}`);
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro lembrete 30min ${consulta.nome}:`, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[LEMBRETE-NPL] Erro geral:', e.message);
+  }
+}
+
+// Verificar lembretes a cada 5 minutos (08h-18h Belém)
+setInterval(() => {
+  const belemHour = new Date().toLocaleString('en-US', { timeZone: 'America/Belem', hour: 'numeric', hour12: false });
+  const h = parseInt(belemHour);
+  if (h >= 8 && h <= 18) {
+    checkLembretesConsulta();
+  }
+}, 5 * 60 * 1000);
+// Primeira verificação 2min após boot
+setTimeout(() => checkLembretesConsulta(), 2 * 60 * 1000);
+
+// Limpar lembretes enviados à meia-noite (para o dia seguinte)
+setInterval(() => {
+  const belemHour = new Date().toLocaleString('en-US', { timeZone: 'America/Belem', hour: 'numeric', hour12: false });
+  if (parseInt(belemHour) === 0) {
+    lembretesEnviados.clear();
+    console.log('[LEMBRETE-NPL] Lembretes limpos para novo dia');
+  }
+}, 60 * 60 * 1000);
 
 // ===== WEBHOOK Z-API =====
 app.post('/webhook/zapi', async (req, res) => {
