@@ -97,6 +97,33 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+// ===== CONTROLE DE AGENDAMENTO ÚNICO POR CONVERSA =====
+// Evita que a Laura agende 2 consultas pro mesmo lead na mesma conversa
+const jaAgendou = new Map(); // phone -> { nome, data, colaboradora, timestamp }
+
+function marcarAgendado(phone, nome, data, colaboradora) {
+  jaAgendou.set(phone, { nome, data, colaboradora, timestamp: Date.now() });
+}
+
+function verificarJaAgendou(phone) {
+  const agendamento = jaAgendou.get(phone);
+  if (!agendamento) return null;
+  // Expira depois de 24h (nova conversa pode agendar)
+  if (Date.now() - agendamento.timestamp > 24 * 60 * 60 * 1000) {
+    jaAgendou.delete(phone);
+    return null;
+  }
+  return agendamento;
+}
+
+// Limpar agendamentos expirados
+setInterval(() => {
+  const now = Date.now();
+  for (const [phone, ag] of jaAgendou) {
+    if (now - ag.timestamp > 24 * 60 * 60 * 1000) jaAgendou.delete(phone);
+  }
+}, 60 * 60 * 1000);
+
 // ===== RATE LIMIT =====
 const rateLimitMap = new Map();
 function checkRateLimit(ip) {
@@ -247,6 +274,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       replyLower.includes('reservado') || replyLower.includes('horário confirmado') ||
       (replyLower.includes('consulta') && (replyLower.includes('dia ') || replyLower.includes('às ')));
     if (calendar && agendouConsulta) {
+      // Verificar se já agendou nesta conversa (evitar double booking)
+      const agendamentoExistente = verificarJaAgendou(phone);
+      if (agendamentoExistente) {
+        console.log(`[CALENDAR-NPL] BLOQUEADO: ${phone} ja agendou (${agendamentoExistente.data} com ${agendamentoExistente.colaboradora})`);
+      } else {
       try {
         const slot = await calendar.encontrarSlot(combinedText, phone);
         if (slot) {
@@ -255,6 +287,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
           const resultado = await calendar.criarConsulta(nome, phone, email, slot.inicio, 'online');
           if (resultado) {
             console.log(`[CALENDAR-NPL] Consulta CRIADA: ${nome} em ${resultado.inicio} com ${resultado.colaboradora}`);
+            marcarAgendado(phone, nome, resultado.inicio, resultado.colaboradora);
             try {
               await db.trackEvent(conversa.id, lead?.id, 'consulta_agendada', `${resultado.inicio} - ${resultado.colaboradora}`);
             } catch (e) {
@@ -298,10 +331,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
             // Enviar confirmação detalhada ao lead (texto + áudio)
             try {
+              const tituloResponsavel = resultado.colaboradora === 'Luiza' ? 'Responsável' : 'Advogada';
               const msgConfirmacao = `${nome}, sua consulta foi confirmada!\n\n` +
-                `📅 Data: ${resultado.inicio}\n` +
-                `👩‍⚖️ Advogada: ${resultado.colaboradora}\n` +
-                `💻 Formato: Online (o link será enviado antes da reunião)\n\n` +
+                `Data: ${resultado.inicio}\n` +
+                `${tituloResponsavel}: ${resultado.colaboradora}\n` +
+                `Formato: Online (o link será enviado antes da reunião)\n\n` +
                 `Escritório NPLADVS - Especializado em Direitos Trabalhistas.\n` +
                 `Qualquer dúvida, estou à disposição!`;
 
@@ -311,9 +345,10 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
               // Enviar áudio de confirmação
               if (audio) {
+                const tituloAudio = resultado.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
                 const audioConfirm = `${nome}, aqui é a Laura do escritório NPLADVS. ` +
                   `Sua consulta trabalhista foi confirmada para ${resultado.inicio} ` +
-                  `com ${resultado.colaboradora}. A consulta será online. ` +
+                  `com ${tituloAudio} ${resultado.colaboradora}. A consulta será online. ` +
                   `Qualquer dúvida, é só me chamar aqui. Até lá!`;
                 const audioBase64 = await audio.gerarAudio(audioConfirm);
                 if (audioBase64) {
@@ -341,6 +376,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       } catch (e) {
         console.log('[CALENDAR-NPL] Erro ao criar evento no agendamento:', e.message);
       }
+      } // fecha else do verificarJaAgendou
     }
 
     // Se veio de audio, responder com audio + texto
@@ -531,9 +567,10 @@ async function checkLembretesConsulta() {
       if (horaAtual === 8 && minAtual < 15 && !lembretesEnviados.has(chaveMatinal)) {
         lembretesEnviados.add(chaveMatinal);
         try {
+          const tituloLembrete = consulta.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
           const msgTexto = `Bom dia, ${consulta.nome}! Aqui é a Laura do escritório NPLADVS. ` +
             `Passando para lembrar que hoje você tem consulta trabalhista às ${consulta.inicioFormatado} ` +
-            `com ${consulta.colaboradora}. A consulta será online. ` +
+            `com ${tituloLembrete} ${consulta.colaboradora}. A consulta será online. ` +
             `Nos vemos mais tarde!`;
 
           // Enviar como áudio
@@ -562,10 +599,11 @@ async function checkLembretesConsulta() {
       if (minFaltando > 0 && minFaltando <= 35 && !lembretesEnviados.has(chave30min)) {
         lembretesEnviados.add(chave30min);
         try {
-          const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${consulta.colaboradora} ` +
-            `começa em 30 minutos! 🕐\n\n` +
-            `O link para a reunião online será enviado em instantes.\n\n` +
-            `Escritório NPLADVS - Estamos te aguardando!`;
+          const titulo30 = consulta.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
+          const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${titulo30} ${consulta.colaboradora} ` +
+            `comeca em 30 minutos!\n\n` +
+            `O link para a reuniao online sera enviado em instantes.\n\n` +
+            `Escritorio NPLADVS - Estamos te aguardando!`;
 
           await whatsapp.sendText(consulta.telefone, msgLembrete);
           console.log(`[LEMBRETE-NPL] Lembrete 30min enviado para ${consulta.nome}`);
