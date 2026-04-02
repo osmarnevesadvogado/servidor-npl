@@ -272,4 +272,196 @@ function buildFichaLead(lead, history, contexto) {
 
   if (!(contexto && (contexto.tipo === 'cliente' || contexto.tipo === 'cliente_processo' || contexto.tipo === 'cliente_processo_pendente'))) {
     linhas.push(`\nTRIAGEM:`);
-    if (triagemIt
+    if (triagemItens.length > 0) {
+      linhas.push(`- Ja coletado: ${triagemItens.join(', ')}`);
+    }
+    if (!temTempo) linhas.push(`- FALTA: tempo de trabalho na empresa`);
+    if (!temCarteira) linhas.push(`- FALTA: se tinha carteira assinada`);
+    if (!temPrazo) linhas.push(`- FALTA: ha quanto tempo saiu da empresa (CRITICO para prazo)`);
+  }
+
+  // Proximo passo
+  if (contexto && contexto.tipo === 'cliente') {
+    linhas.push(`\nPROXIMO PASSO: E CLIENTE. Atenda conforme o pedido. Se quiser agendar, ofereca horarios.`);
+  } else if (contexto && contexto.tipo === 'cliente_processo') {
+    // Proximo passo ja foi definido no bloco cliente_processo acima, nao sobrescrever
+  } else {
+    let proximoPasso;
+    if (!temNome) {
+      proximoPasso = 'Mostre EMPATIA sobre a situacao + peca o NOME';
+    } else if (!triagemMinima) {
+      proximoPasso = 'Faca a proxima pergunta de TRIAGEM (UMA por vez). Pergunte o que ainda falta na lista acima.';
+    } else if (triagemCompleta) {
+      proximoPasso = 'TRIAGEM COMPLETA. Avalie viabilidade e, se viavel, OFERECA HORARIOS DA AGENDA.';
+    } else {
+      proximoPasso = 'Triagem quase completa. Faca mais uma pergunta do que falta, ou se ja tem info suficiente, avalie viabilidade e ofereca agendar.';
+    }
+
+    linhas.push(`\nPROXIMO PASSO: ${proximoPasso}`);
+  }
+
+  return linhas.join('\n');
+}
+
+// ===== BUSCAR HORÁRIOS DO CALENDÁRIO =====
+// O módulo calendar é injetado via setCalendar() pelo server.js
+let _calendar = null;
+
+function setCalendar(calendarModule) {
+  _calendar = calendarModule;
+  console.log('[IA-NPL] Calendar module configurado');
+}
+
+async function buscarHorarios(phone) {
+  if (!_calendar) {
+    console.log('[IA-NPL] Calendar nao disponivel (modulo nao carregado)');
+    return null;
+  }
+  try {
+    const { texto, slots } = await _calendar.sugerirHorarios(3, phone || null);
+    if (slots.length > 0) {
+      return slots.map(s => `- ${s.label}`).join('\n');
+    }
+  } catch (e) {
+    console.log('[IA-NPL] Erro ao buscar horarios:', e.message);
+  }
+  return null;
+}
+
+// ===== CORTAR RESPOSTAS LONGAS =====
+function trimResponse(text) {
+  let clean = text.replace(/^[\s]*[-•·*]\s*/gm, '').replace(/^[\s]*\d+[.)]\s*/gm, '');
+  clean = clean.replace(/\n{2,}/g, '\n').trim();
+
+  // Remover emojis
+  clean = clean.replace(/[\u{1F300}-\u{1FAF8}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
+
+  const protected_ = clean
+    .replace(/\b(Dr|Dra|Sr|Sra|Prof|Art|Inc|Ltd|Ltda|nº|tel)\./gi, '$1\u0000')
+    .replace(/(\d)\./g, '$1\u0000')
+    .replace(/\.{3}/g, '\u0001');
+
+  const sentences = protected_.match(/[^.!?]+[.!?]+/g) || [protected_];
+  const restored = sentences.map(s => s.replace(/\u0000/g, '.').replace(/\u0001/g, '...'));
+
+  const result = restored.slice(0, 4).join(' ').trim();
+  if (result.length > 400) {
+    return restored.slice(0, 3).join(' ').trim();
+  }
+  return result;
+}
+
+// ===== HISTÓRICO =====
+function buildRecentHistory(history) {
+  const recent = history.slice(-10);
+  return recent.map(m => ({ role: m.role, content: m.content }));
+}
+
+// ===== GERAR RESPOSTA =====
+async function generateResponse(history, userMessage, conversaId, lead, contexto, phone) {
+  const recentHistory = buildRecentHistory(history);
+  const fichaLead = buildFichaLead(lead, history, contexto);
+  const horariosTexto = await buscarHorarios(phone);
+
+  let agendaSection = '';
+  if (horariosTexto) {
+    agendaSection = `\nAGENDA DISPONIVEL:\n${horariosTexto}\n(Use SOMENTE estes horarios. Nunca invente.)`;
+  } else {
+    agendaSection = `\nAGENDA: Sem horarios carregados. Diga que vai verificar a agenda e retorna.`;
+  }
+
+  const systemPrompt = SYSTEM_PROMPT_BASE;
+
+  const fichaCompleta = `===== FICHA DO LEAD (CONSULTE ANTES DE RESPONDER) =====
+${fichaLead}
+${agendaSection}
+=========================
+
+Mensagem do lead: "${userMessage}"
+
+LEMBRE: Siga o PROXIMO PASSO indicado na ficha. Nao pergunte o que ja esta preenchido.`;
+
+  console.log(`[IA-NPL] Ficha: ${fichaLead.replace(/\n/g, ' | ')}`);
+
+  const messages = [
+    ...recentHistory,
+    { role: 'user', content: fichaCompleta }
+  ];
+
+  const cleanMessages = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const prev = cleanMessages[cleanMessages.length - 1];
+    if (prev && prev.role === msg.role) {
+      prev.content += '\n' + msg.content;
+    } else {
+      cleanMessages.push({ ...msg });
+    }
+  }
+
+  if (cleanMessages.length > 0 && cleanMessages[0].role !== 'user') {
+    cleanMessages.unshift({ role: 'user', content: 'Ola' });
+  }
+
+  try {
+    const response = await anthropic.messages.create({
+      model: config.CLAUDE_MODEL,
+      max_tokens: config.MAX_TOKENS,
+      system: systemPrompt,
+      messages: cleanMessages
+    });
+
+    return response.content[0].text;
+  } catch (e) {
+    console.error('[CLAUDE-NPL] Erro:', e.message);
+    return 'Desculpe, estou com uma dificuldade tecnica. Entre em contato pelo telefone do escritorio.';
+  }
+}
+
+// ===== GERAR FOLLOW-UP INTELIGENTE =====
+async function generateFollowUp(history, lead, followUpNumber) {
+  const nome = (lead && lead.nome && !lead.nome.startsWith('WhatsApp')) ? lead.nome : 'amigo(a)';
+  const detalhe = lead?.notas || 'questao trabalhista';
+
+  const userMsgs = (history || []).filter(m => m.role === 'user').map(m => m.content.slice(0, 100));
+  const resumo = userMsgs.length > 0 ? userMsgs.slice(-3).join(' / ') : 'sem mensagens anteriores';
+
+  const prompt = `Voce e a Laura, assistente do escritorio NPLADVS (especializado em trabalhista, Belem/PA).
+O lead "${nome}" conversou com voce sobre "${detalhe}" mas parou de responder.
+Ultimas mensagens do lead: "${resumo}"
+
+Este e o follow-up numero ${followUpNumber}. Gere UMA mensagem curta (2-3 frases) para retomar o contato.
+
+Regras:
+- Sem emojis
+- Use o nome da pessoa
+- Seja acolhedora mas com intencao de agendar consulta
+- ${followUpNumber === 1 ? 'Pergunte se ficou com alguma duvida, seja leve.' : ''}
+- ${followUpNumber === 2 ? 'Seja um pouco mais pessoal, mostre que se importa com a situacao do trabalhador.' : ''}
+- ${followUpNumber === 3 ? 'Use um argumento concreto: mencione o prazo de 2 anos para entrar com acao trabalhista ou que muitos casos o escritorio so cobra se ganhar.' : ''}
+- ${followUpNumber === 4 ? 'Mensagem final, respeitosa. Diga que nao quer incomodar mas esta a disposicao.' : ''}
+- Nao mencione email. A confirmacao e por WhatsApp.
+- Termine sempre conduzindo para o agendamento.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: config.CLAUDE_MODEL,
+      max_tokens: 150,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const reply = trimResponse(response.content[0].text);
+    console.log(`[FOLLOWUP-NPL] Gerado para ${nome}: "${reply.slice(0, 60)}..."`);
+    return reply;
+  } catch (e) {
+    console.error('[FOLLOWUP-NPL] Erro:', e.message);
+    return null;
+  }
+}
+
+module.exports = {
+  generateResponse,
+  generateFollowUp,
+  trimResponse,
+  setCalendar
+};
