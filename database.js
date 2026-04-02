@@ -40,10 +40,10 @@ async function updateConversa(conversaId, updates) {
 
 // ===== MENSAGENS =====
 
-async function saveMessage(conversaId, role, content) {
+async function saveMessage(conversaId, role, content, extra = {}) {
   await supabase
     .from('mensagens')
-    .insert({ conversa_id: conversaId, role, content });
+    .insert({ conversa_id: conversaId, role, content, ...extra });
 }
 
 async function getHistory(conversaId, limit = 100) {
