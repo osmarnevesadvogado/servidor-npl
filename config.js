@@ -9,8 +9,12 @@ module.exports = {
   CLAUDE_MODEL: 'claude-haiku-4-5-20251001',
   MAX_TOKENS: 200,
 
-  // OpenAI (Whisper + TTS) — pode usar a mesma API key
+  // OpenAI (Whisper — transcrição de áudio)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+
+  // ElevenLabs (TTS — geração de voz natural)
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
+  ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'rdBSfr2PAUTCe39SX2fo',
 
   // Supabase — MESMO banco, dados separados por campo 'escritorio'
   SUPABASE_URL: process.env.SUPABASE_URL,
