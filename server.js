@@ -250,6 +250,34 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
             console.log(`[CALENDAR-NPL] Consulta CRIADA: ${nome} em ${resultado.inicio} com ${resultado.colaboradora}`);
             await db.trackEvent(conversa.id, lead?.id, 'consulta_agendada', `${resultado.inicio} - ${resultado.colaboradora}`);
 
+            // Criar tarefa no CRM para a consulta agendada
+            try {
+              const dataConsulta = slot.inicio.toISOString().slice(0, 10);
+              await db.createTarefa({
+                descricao: `Consulta Trabalhista - ${nome} - ${resultado.inicio} com ${resultado.colaboradora}`,
+                data_limite: dataConsulta,
+                prioridade: 'alta',
+                status: 'pendente',
+                responsavel: resultado.colaboradora
+              });
+              console.log(`[TAREFA-NPL] Tarefa criada para consulta de ${nome}`);
+            } catch (e) {
+              console.log('[TAREFA-NPL] Erro ao criar tarefa:', e.message);
+            }
+
+            // Mover lead no funil para "proposta" (agendou consulta)
+            if (lead) {
+              try {
+                const etapaAtual = lead.etapa_funil || 'novo';
+                if (etapaAtual !== 'convertido' && etapaAtual !== 'proposta') {
+                  await db.updateLead(lead.id, { etapa_funil: 'proposta' });
+                  console.log(`[FUNIL-NPL] ${nome} movido para 'proposta' (agendou consulta)`);
+                }
+              } catch (e) {
+                console.log('[FUNIL-NPL] Erro ao mover lead:', e.message);
+              }
+            }
+
             // Notificar Dr. Osmar sobre o novo agendamento
             await whatsapp.notifyHotLead(
               `CONSULTA AGENDADA: ${nome}`,
