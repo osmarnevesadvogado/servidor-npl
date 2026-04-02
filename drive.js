@@ -7,10 +7,22 @@ const config = require('./config');
 
 // Autenticação com Service Account (mesma credencial do Calendar)
 function getDriveClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_CALENDAR_CREDENTIALS || '{}');
+  const credStr = config.GOOGLE_CALENDAR_CREDENTIALS;
+  if (!credStr) {
+    console.error('[DRIVE-NPL] GOOGLE_CALENDAR_CREDENTIALS não configurada');
+    return null;
+  }
 
-  if (!credentials.client_email) {
-    console.error('[DRIVE-NPL] Credenciais não configuradas');
+  let credentials;
+  try {
+    credentials = JSON.parse(credStr);
+  } catch (e) {
+    console.error('[DRIVE-NPL] Erro ao parsear credenciais:', e.message);
+    return null;
+  }
+
+  if (!credentials.client_email || !credentials.private_key) {
+    console.error('[DRIVE-NPL] Credenciais incompletas');
     return null;
   }
 
