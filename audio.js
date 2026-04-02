@@ -1,5 +1,8 @@
 // ===== MÓDULO DE ÁUDIO - NPLADVS (Laura) =====
-// Transcrição (Whisper) e Geração de Voz (TTS) via OpenAI
+// Transcrição: Whisper (OpenAI)
+// Geração de voz: ElevenLabs (voz natural em português BR)
+// Fallback: OpenAI TTS se ElevenLabs não estiver configurada
+
 const config = require('./config');
 const OpenAI = require('openai');
 const fs = require('fs');
@@ -8,7 +11,7 @@ const os = require('os');
 
 let openaiClient = null;
 
-function getClient() {
+function getOpenAI() {
   if (!openaiClient) {
     if (!config.OPENAI_API_KEY) {
       console.error('[AUDIO-NPL] OPENAI_API_KEY não configurada');
@@ -19,9 +22,9 @@ function getClient() {
   return openaiClient;
 }
 
-// ===== TRANSCREVER ÁUDIO (Whisper) =====
+// ===== TRANSCREVER ÁUDIO (Whisper — OpenAI) =====
 async function transcreverAudio(audioUrl) {
-  const client = getClient();
+  const client = getOpenAI();
   if (!client) return null;
 
   let tempFile = null;
@@ -60,15 +63,63 @@ async function transcreverAudio(audioUrl) {
   }
 }
 
-// ===== GERAR ÁUDIO DA RESPOSTA (TTS) =====
-async function gerarAudio(texto) {
-  const client = getClient();
+// ===== GERAR ÁUDIO (ElevenLabs — voz natural) =====
+async function gerarAudioElevenLabs(texto) {
+  const apiKey = config.ELEVENLABS_API_KEY;
+  const voiceId = config.ELEVENLABS_VOICE_ID;
+
+  if (!apiKey || !voiceId) return null;
+
+  try {
+    const textoLimitado = texto.slice(0, 800);
+
+    console.log('[AUDIO-NPL] ElevenLabs gerando voz para:', textoLimitado.slice(0, 60));
+
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': apiKey
+      },
+      body: JSON.stringify({
+        text: textoLimitado,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0.3,
+          use_speaker_boost: true
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`ElevenLabs ${response.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+    console.log('[AUDIO-NPL] ElevenLabs áudio gerado com sucesso');
+    return `data:audio/mpeg;base64,${base64}`;
+
+  } catch (e) {
+    console.error('[AUDIO-NPL] Erro ElevenLabs:', e.message);
+    return null;
+  }
+}
+
+// ===== FALLBACK: OpenAI TTS =====
+async function gerarAudioOpenAI(texto) {
+  const client = getOpenAI();
   if (!client) return null;
 
   try {
     const textoLimitado = texto.slice(0, 500);
 
-    console.log('[AUDIO-NPL] Gerando voz para:', textoLimitado.slice(0, 60));
+    console.log('[AUDIO-NPL] OpenAI TTS (fallback) para:', textoLimitado.slice(0, 60));
 
     const response = await client.audio.speech.create({
       model: 'tts-1',
@@ -81,13 +132,26 @@ async function gerarAudio(texto) {
     const arrayBuffer = await response.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString('base64');
 
-    console.log('[AUDIO-NPL] Áudio gerado com sucesso');
+    console.log('[AUDIO-NPL] OpenAI TTS áudio gerado (fallback)');
     return `data:audio/mpeg;base64,${base64}`;
 
   } catch (e) {
-    console.error('[AUDIO-NPL] Erro ao gerar áudio:', e.message);
+    console.error('[AUDIO-NPL] Erro OpenAI TTS:', e.message);
     return null;
   }
+}
+
+// ===== GERAR ÁUDIO (tenta ElevenLabs, fallback OpenAI) =====
+async function gerarAudio(texto) {
+  // Tentar ElevenLabs primeiro (voz natural)
+  if (config.ELEVENLABS_API_KEY) {
+    const audio = await gerarAudioElevenLabs(texto);
+    if (audio) return audio;
+    console.log('[AUDIO-NPL] ElevenLabs falhou, tentando OpenAI como fallback...');
+  }
+
+  // Fallback para OpenAI TTS
+  return await gerarAudioOpenAI(texto);
 }
 
 module.exports = {
