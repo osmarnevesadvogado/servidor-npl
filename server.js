@@ -692,6 +692,45 @@ app.post('/webhook/zapi', async (req, res) => {
     const audioUrl = body.audio?.audioUrl || body.audioMessage?.url || body.audio?.url || null;
     const isAudio = body.isAudio === true || !!body.audioMessage || (!!audioUrl && audioUrl.length > 10);
 
+    // Detectar mídia (imagem, documento, vídeo)
+    const imageData = body.image || body.imageMessage || null;
+    const documentData = body.document || body.documentMessage || null;
+    const videoData = body.video || body.videoMessage || null;
+    const hasMedia = imageData || documentData || videoData;
+
+    // Se for mídia (imagem, documento, vídeo), salvar na conversa
+    if (hasMedia && phone) {
+      let mediaUrl = null;
+      let mediaType = null;
+      let caption = '';
+
+      if (imageData) {
+        mediaUrl = imageData.imageUrl || imageData.url || imageData.mediaUrl || null;
+        mediaType = 'image';
+        caption = imageData.caption || '';
+      } else if (documentData) {
+        mediaUrl = documentData.documentUrl || documentData.url || documentData.mediaUrl || null;
+        mediaType = 'document';
+        caption = documentData.fileName || documentData.caption || 'Documento';
+      } else if (videoData) {
+        mediaUrl = videoData.videoUrl || videoData.url || videoData.mediaUrl || null;
+        mediaType = 'video';
+        caption = videoData.caption || '';
+      }
+
+      console.log(`[MEDIA-NPL] ${mediaType} recebido de ${phone}: ${mediaUrl?.slice(0, 60)}`);
+
+      try {
+        const conversa = await db.getOrCreateConversa(phone);
+        const content = caption || (mediaType === 'image' ? '📷 Imagem' : mediaType === 'document' ? '📄 Documento' : '🎥 Vídeo');
+        await db.saveMessage(conversa.id, 'user', content, { media_url: mediaUrl, media_type: mediaType });
+      } catch (e) {
+        console.error('[MEDIA-NPL] Erro ao salvar mídia:', e.message);
+      }
+
+      return res.json({ status: 'media_saved' });
+    }
+
     // Se for audio, transcrever antes de processar
     if (isAudio || audioUrl) {
       if (!audio) return res.json({ status: 'audio_not_configured' });
@@ -1010,6 +1049,39 @@ app.get('/api/relatorio-semanal', async (req, res) => {
     res.json(r);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ===== ENVIAR ARQUIVO (imagem ou documento) =====
+app.post('/api/enviar-arquivo', async (req, res) => {
+  try {
+    const { phone, fileUrl, fileName, mediaType, conversaId, usuario_nome } = req.body;
+    if (!phone || !fileUrl) return res.status(400).json({ error: 'phone e fileUrl obrigatorios' });
+
+    let result;
+    const type = mediaType || 'document';
+
+    if (type === 'image') {
+      result = await whatsapp.sendImage(phone, fileUrl, fileName || '');
+    } else {
+      result = await whatsapp.sendDocument(phone, fileUrl, fileName || 'arquivo.pdf');
+    }
+
+    // Salvar na conversa
+    if (conversaId) {
+      const content = type === 'image' ? (fileName || '📷 Imagem enviada') : (fileName || '📄 Documento enviado');
+      await db.saveMessage(conversaId, 'assistant', content, {
+        manual: true,
+        usuario_nome: usuario_nome || null,
+        media_url: fileUrl,
+        media_type: type
+      });
+    }
+
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error('[ENVIAR-ARQUIVO] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao enviar arquivo' });
   }
 });
 
