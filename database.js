@@ -40,11 +40,10 @@ async function updateConversa(conversaId, updates) {
 
 // ===== MENSAGENS =====
 
-async function saveMessage(conversaId, role, content, extras = {}) {
-  const row = { conversa_id: conversaId, role, content };
-  if (extras.manual) row.manual = true;
-  if (extras.usuario_nome) row.usuario_nome = extras.usuario_nome;
-  await supabase.from('mensagens').insert(row);
+async function saveMessage(conversaId, role, content, extra = {}) {
+  await supabase
+    .from('mensagens')
+    .insert({ conversa_id: conversaId, role, content, ...extra });
 }
 
 async function getHistory(conversaId, limit = 100) {
@@ -188,7 +187,7 @@ async function trackEvent(conversaId, leadId, evento, detalhes) {
 async function getEligibleConversas() {
   const { data } = await supabase
     .from('conversas')
-    .select('id, telefone, lead_id, leads(id, nome, tese_interesse, etapa_funil, telefone)')
+    .select('id, telefone, lead_id, leads(id, nome, tese_interesse, etapa_funil, telefone, followup_tipo)')
     .eq('status', 'ativa')
     .eq('escritorio', ESC)
     .not('lead_id', 'is', null);
@@ -320,27 +319,51 @@ async function findClienteProcessoByName(nome) {
     }
   }
 
-  // Busca parcial: primeiro + último nome como palavras (não pedaços)
-  // Usar espaços ao redor para evitar match parcial (ex: "ana" não bater em "mariana")
+  // Busca parcial: usar a palavra MAIS RARA (não comum) para filtrar no banco
+  // Depois cruzar com todas as palavras para pontuar
+  const palavrasRaras = palavras.filter(p => !NOMES_COMUNS.includes(p) && !SOBRENOMES_COMUNS.includes(p));
+  const palavraBusca = palavrasRaras.length > 0 ? palavrasRaras[0] : primeiro;
+
   const { data: parcial } = await supabase
     .from('npl_clientes_processos')
     .select('*')
-    .or(`nome_normalizado.ilike.${primeiro} %,nome_normalizado.ilike.% ${primeiro} %,nome_normalizado.ilike.% ${primeiro}`)
-    .or(`nome_normalizado.ilike.${ultimo} %,nome_normalizado.ilike.% ${ultimo} %,nome_normalizado.ilike.% ${ultimo}`);
+    .or(`nome_normalizado.ilike.%${palavraBusca}%`);
 
-  // Só confiar se achou EXATAMENTE 1 resultado (sem ambiguidade)
-  if (parcial && parcial.length === 1) return parcial;
-
-  // Se achou mais de 1, verificar se algum é match muito próximo (>80% das palavras)
-  if (parcial && parcial.length > 1 && parcial.length <= 3) {
-    const melhorMatch = parcial.filter(p => {
-      const nomeBanco = (p.nome_normalizado || '').split(' ').filter(w => w.length > 2);
-      const palavrasMatch = palavras.filter(pl => nomeBanco.includes(pl));
-      return palavrasMatch.length >= Math.max(palavras.length, nomeBanco.length) * 0.7;
-    });
-    if (melhorMatch.length === 1) return melhorMatch;
+  if (!parcial || parcial.length === 0) {
+    // Fallback: buscar por primeiro nome se a rara não achou nada
+    if (palavrasRaras.length > 0) {
+      const { data: fallback } = await supabase
+        .from('npl_clientes_processos')
+        .select('*')
+        .or(`nome_normalizado.ilike.${primeiro} %,nome_normalizado.ilike.% ${primeiro} %,nome_normalizado.ilike.% ${primeiro}`);
+      if (fallback && fallback.length === 1) return fallback;
+    }
+    return null;
   }
 
+  // Só 1 resultado — confiar
+  if (parcial.length === 1) return parcial;
+
+  // Múltiplos resultados — pontuar por quantidade de palavras em comum
+  if (parcial.length > 1 && parcial.length <= 10) {
+    const pontuados = parcial.map(p => {
+      const nomeBanco = (p.nome_normalizado || '').split(' ').filter(w => w.length > 2);
+      const palavrasMatch = palavras.filter(pl => nomeBanco.includes(pl));
+      return { ...p, score: palavrasMatch.length / Math.max(palavras.length, nomeBanco.length) };
+    }).filter(p => p.score >= 0.5) // mínimo 50% de match
+      .sort((a, b) => b.score - a.score);
+
+    // Se o melhor match tem score muito acima do segundo, confiar
+    if (pontuados.length === 1) return [pontuados[0]];
+    if (pontuados.length >= 2 && pontuados[0].score > pontuados[1].score + 0.2) {
+      return [pontuados[0]];
+    }
+    // Se top matches têm score alto (>70%), retornar todos pra Laura perguntar
+    const bonsMatches = pontuados.filter(p => p.score >= 0.7);
+    if (bonsMatches.length > 0 && bonsMatches.length <= 3) return bonsMatches;
+  }
+
+  console.log(`[DB-NPL] ${parcial.length} resultados para "${normalizado}", ambiguidade alta`);
   return null;
 }
 
