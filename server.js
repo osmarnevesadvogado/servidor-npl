@@ -235,8 +235,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       if (pendingVerif) {
         // Já encontramos um match antes — verificar se o lead confirmou
         const lower = combinedText.toLowerCase().trim();
-        const confirmou = /\b(sim|confirmo|isso|exato|sou eu|tenho sim|correto|é isso|isso mesmo|sou cliente|tenho processo)\b/.test(lower);
-        const negou = /\b(não|nao|nunca|nenhum|engano|errado|outro|primeira vez)\b/.test(lower);
+        // Verificar se mencionou a empresa do processo (forte confirmação)
+        const empresas = pendingVerif.processos.map(p => (p.parte_contraria || '').toLowerCase()).filter(Boolean);
+        const mencionouEmpresa = empresas.some(emp => emp.length > 3 && lower.includes(emp.split(' ')[0]));
+        const confirmou = mencionouEmpresa || /\b(sim|confirmo|isso|exato|sou eu|tenho sim|correto|é isso|isso mesmo|sou cliente|tenho processo|ja tenho|tive sim)\b/.test(lower);
+        const negou = /\b(nunca|nenhum|engano|errado|primeira vez|nao tenho processo|nao sou cliente|nunca processei)\b/.test(lower);
 
         if (confirmou) {
           console.log(`[CLIENTE-ANTIGO-NPL] ${cleanP} CONFIRMOU ser cliente existente`);
@@ -255,14 +258,14 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
           pendingClienteVerification.delete(cleanP);
           // Segue como lead normal, contexto fica null/lead
         } else {
-          // Resposta ambígua — manter pendente mas não bloquear fluxo
+          // Resposta ambígua — tentar mais 1 vez, depois seguir como lead
           pendingVerif.tentativas = (pendingVerif.tentativas || 0) + 1;
-          if (pendingVerif.tentativas >= 3) {
-            // Após 3 tentativas, desistir da verificação
-            console.log(`[CLIENTE-ANTIGO-NPL] ${cleanP} não confirmou após 3 tentativas, seguindo como lead`);
+          if (pendingVerif.tentativas >= 2) {
+            // Após 2 tentativas, desistir — seguir como lead normal
+            console.log(`[CLIENTE-ANTIGO-NPL] ${cleanP} não confirmou após 2 tentativas, seguindo como lead`);
             pendingClienteVerification.delete(cleanP);
           } else {
-            // Manter o contexto pendente para a Laura perguntar de novo
+            // Manter pendente mas NÃO bloquear — Laura pode perguntar na próxima msg
             contexto = { tipo: 'cliente_processo_pendente', processos: pendingVerif.processos };
           }
         }
