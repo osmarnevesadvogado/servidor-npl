@@ -179,17 +179,26 @@ function buildFichaLead(lead, history, contexto) {
     linhas.push(`- Se quiser agendar nova consulta, prossiga normalmente com a agenda`);
   } else if (contexto && contexto.tipo === 'cliente_processo_pendente') {
     // === POSSÍVEL CLIENTE ANTIGO — AGUARDANDO CONFIRMAÇÃO ===
-    const proc = contexto.processos[0];
+    const processos = contexto.processos;
+    const proc = processos[0];
+    const empresas = [...new Set(processos.map(p => p.parte_contraria).filter(Boolean))];
     linhas.push(`ATENCAO: O nome desta pessoa COINCIDE com um cliente existente do escritorio!`);
     linhas.push(`- Nome encontrado na base: ${proc.nome_cliente}`);
-    linhas.push(`- POREM, ainda NAO foi confirmado se e a mesma pessoa.`);
+    linhas.push(`- POREM, ainda NAO foi confirmado se e a mesma pessoa (pode ser homonimo).`);
     linhas.push(``);
     linhas.push(`COMPORTAMENTO OBRIGATORIO:`);
-    linhas.push(`- Voce DEVE fazer a seguinte pergunta de verificacao (copie EXATAMENTE):`);
-    linhas.push(`  "Verificamos que o seu nome consta em nosso banco de dados. Voce confirma que possui um processo com o escritorio Neves Pinheiro Lins Sociedade de Advogados?"`);
-    linhas.push(`- NAO compartilhe nenhum dado do processo antes da confirmacao`);
-    linhas.push(`- NAO trate como cliente existente ate receber confirmacao`);
-    linhas.push(`- Se a pessoa ja respondeu algo ambiguo, pergunte novamente de forma educada`);
+    if (empresas.length > 0) {
+      linhas.push(`- Para confirmar a identidade, pergunte de forma NATURAL sobre a empresa:`);
+      linhas.push(`  "[nome], antes de continuar, voce ja teve algum processo trabalhista com o escritorio? Seria contra a empresa ${empresas[0]}?"`);
+      linhas.push(`- Se o lead confirmar a empresa ou o processo, trate como cliente existente.`);
+      linhas.push(`- Se o lead negar ou mencionar outra empresa, trate como lead novo normalmente.`);
+    } else {
+      linhas.push(`- Pergunte de forma NATURAL se ja e cliente do escritorio:`);
+      linhas.push(`  "[nome], voce ja tem ou ja teve algum processo com o escritorio NPLADVS?"`);
+    }
+    linhas.push(`- NAO compartilhe dados do processo antes da confirmacao`);
+    linhas.push(`- Se a resposta for ambigua, tente UMA vez mais de forma educada. Se continuar ambigua, siga como lead novo.`);
+    linhas.push(`- IMPORTANTE: NAO deixe essa verificacao atrapalhar o fluxo da conversa. Se o lead quer falar de outro assunto, atenda normalmente e aproveite para confirmar depois.`);
 
   } else if (contexto && contexto.tipo === 'cliente_processo') {
     // === CLIENTE ANTIGO (identificado e CONFIRMADO pela planilha de processos) ===
