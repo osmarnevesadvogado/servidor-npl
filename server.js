@@ -672,8 +672,9 @@ app.post('/webhook/zapi', async (req, res) => {
 
     // Validar token do webhook (opcional — só valida se ZAPI_WEBHOOK_TOKEN estiver configurado)
     if (config.ZAPI_WEBHOOK_TOKEN) {
-      const received = req.headers['client-token'] || req.headers['x-api-key'] || req.headers['authorization'];
+      const received = req.headers['client-token'] || req.headers['x-api-key'] || req.headers['authorization'] || req.query.token;
       if (received !== config.ZAPI_WEBHOOK_TOKEN) {
+        console.log('[WEBHOOK-NPL] Token invalido recebido - rejeitando');
         return res.status(401).json({ error: 'Unauthorized' });
       }
     }
