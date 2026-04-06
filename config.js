@@ -7,7 +7,7 @@ module.exports = {
   // Anthropic (Claude) — pode usar a mesma API key
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   CLAUDE_MODEL: 'claude-haiku-4-5-20251001',
-  MAX_TOKENS: 200,
+  MAX_TOKENS: 400,
 
   // OpenAI (Whisper — transcrição de áudio)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,

@@ -112,6 +112,9 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+// ===== CONTROLE DE NOTIFICAÇÃO DE LEAD QUENTE =====
+const jaNotificouHot = new Set(); // phones já notificados como lead quente
+
 // ===== CONTROLE DE AGENDAMENTO ÚNICO POR CONVERSA =====
 // Evita que a Laura agende 2 consultas pro mesmo lead na mesma conversa
 const jaAgendou = new Map(); // phone -> { nome, data, colaboradora, timestamp }
@@ -197,16 +200,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     }
     const etapaAntes = fluxo.getEtapa(conversa.id);
 
-    const leadAtualizado = await db.getOrCreateLead(phone, finalName);
-    const etapaDepois = fluxo.processarEtapa(conversa.id, combinedText, leadAtualizado);
+    const etapaDepois = fluxo.processarEtapa(conversa.id, combinedText, lead);
 
     if (etapaAntes !== etapaDepois) {
       await db.updateConversa(conversa.id, { etapa_conversa: etapaDepois });
       await db.trackEvent(conversa.id, lead?.id, 'etapa_avancou', `${etapaAntes} -> ${etapaDepois}`);
     }
 
-    // Detectar lead quente
-    if (lead && isHotLead(combinedText)) {
+    // Detectar lead quente (notifica só 1 vez por lead)
+    const cleanP = whatsapp.cleanPhone(phone);
+    if (lead && isHotLead(combinedText) && !jaNotificouHot.has(cleanP)) {
+      jaNotificouHot.add(cleanP);
       console.log(`[HOT-NPL] Lead quente: ${finalName}`);
       await db.markLeadHot(lead.id);
       await whatsapp.notifyHotLead(finalName || lead.nome, phone, combinedText.slice(0, 100));
@@ -226,7 +230,6 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
     // Se não é cliente CRM, verificar se é cliente antigo (planilha de processos) pelo nome
     if (!contexto || contexto.tipo === 'lead') {
-      const cleanP = whatsapp.cleanPhone(phone);
       const pendingVerif = pendingClienteVerification.get(cleanP);
 
       if (pendingVerif) {
@@ -266,7 +269,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       } else {
         // Primeira busca — só buscar se o nome tem pelo menos 2 palavras significativas
         // A função findClienteProcessoByName já filtra nomes comuns internamente
-        const nomeLead = leadAtualizado?.nome;
+        const nomeLead = lead?.nome;
         if (nomeLead && !nomeLead.startsWith('WhatsApp')) {
           const palavras = nomeLead.trim().split(/\s+/).filter(p => p.length > 2);
           if (palavras.length >= 2) {
@@ -288,7 +291,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
     // Gerar e enviar resposta
     const history = await db.getHistory(conversa.id);
-    const rawReply = await ia.generateResponse(history, combinedText, conversa.id, leadAtualizado, contexto, phone);
+    const rawReply = await ia.generateResponse(history, combinedText, conversa.id, lead, contexto, phone);
     const reply = ia.trimResponse(rawReply);
     await db.saveMessage(conversa.id, 'assistant', reply);
 
@@ -307,8 +310,8 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       try {
         const slot = await calendar.encontrarSlot(combinedText, phone);
         if (slot) {
-          const nome = leadAtualizado?.nome || 'Lead';
-          const email = leadAtualizado?.email || null;
+          const nome = lead?.nome || 'Lead';
+          const email = lead?.email || null;
           const resultado = await calendar.criarConsulta(nome, phone, email, slot.inicio, 'online');
           if (resultado) {
             console.log(`[CALENDAR-NPL] Consulta CRIADA: ${nome} em ${resultado.inicio} com ${resultado.colaboradora}`);
@@ -388,7 +391,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
             // Analisar conversa para aprendizado (async, não bloqueia)
             if (aprendizado) {
               const histCompleto = await db.getHistory(conversa.id);
-              aprendizado.analisarConversa(histCompleto, leadAtualizado, 'agendou').catch(e =>
+              aprendizado.analisarConversa(histCompleto, lead, 'agendou').catch(e =>
                 console.log('[APRENDIZADO-NPL] Erro na analise pos-agendamento:', e.message)
               );
             }
@@ -404,17 +407,14 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       } // fecha else do verificarJaAgendou
     }
 
-    // Se veio de audio, responder com audio + texto
+    // Enviar resposta — áudio só se o lead mandou áudio
+    await whatsapp.sendText(phone, reply);
     if (respondComAudio && audio) {
       const audioBase64 = await audio.gerarAudio(reply);
       if (audioBase64) {
         await whatsapp.sendAudio(phone, audioBase64);
         console.log(`[AUDIO-NPL] Resposta em audio enviada para ${phone}`);
-      } else {
-        await whatsapp.sendText(phone, reply);
       }
-    } else {
-      await whatsapp.sendText(phone, reply);
     }
 
     // Atualizar etapa do funil
@@ -509,12 +509,12 @@ async function checkFollowUps() {
       }
 
       // 2o FOLLOW-UP: 4h sem resposta
-      if (followUpCount === 2 && hoursAgo >= 2 && hoursAgo < 20) {
+      if (followUpCount === 2 && hoursAgo >= 4 && hoursAgo < 20) {
         const fixo = `${nome}, aqui e a Laura do escritorio NPLADVS. Passando para saber se posso te ajudar com a sua situacao trabalhista. Temos horarios disponiveis essa semana e a consulta inicial e sem compromisso.`;
         const msg = await getSmartMsg(fixo, 2);
         console.log(`[FOLLOWUP-NPL-4h] ${conv.telefone} (${nome})`);
-        await sendFollowUp(msg, true);
-        await db.trackEvent(conv.id, conv.leads?.id, 'followup_4h_audio', nome);
+        await sendFollowUp(msg, false);
+        await db.trackEvent(conv.id, conv.leads?.id, 'followup_4h', nome);
       }
 
       // 3o FOLLOW-UP: 24h
@@ -531,8 +531,14 @@ async function checkFollowUps() {
         const fixo = `${nome}, tudo bem? Aqui e a Laura do escritorio NPLADVS. Essa e a minha ultima mensagem sobre o assunto, nao quero te incomodar. Caso mude de ideia, estamos a disposicao para avaliar os seus direitos. Te desejo tudo de bom.`;
         const msg = await getSmartMsg(fixo, 4);
         console.log(`[FOLLOWUP-NPL-72h] ${conv.telefone} (${nome})`);
-        await sendFollowUp(msg, true);
-        await db.trackEvent(conv.id, conv.leads?.id, 'followup_72h_audio', nome);
+        await sendFollowUp(msg, false);
+        await db.trackEvent(conv.id, conv.leads?.id, 'followup_72h', nome);
+
+        // Marcar lead como perdido
+        if (conv.leads?.id) {
+          await db.updateLead(conv.leads.id, { etapa_funil: 'perdido' });
+          console.log(`[FUNIL-NPL] ${nome} marcado como perdido (4o follow-up sem resposta)`);
+        }
 
         // Analisar conversa perdida para aprendizado
         if (aprendizado) {

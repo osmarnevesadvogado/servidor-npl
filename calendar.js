@@ -228,7 +228,17 @@ function getHorasDoDia() {
 
 // ===== BUSCAR HORÁRIOS DISPONÍVEIS =====
 
+// Cache de horários (evita chamadas repetidas ao Google Calendar)
+let horariosCache = null;
+let horariosCacheExpires = 0;
+
 async function getHorariosDisponiveis(diasParaFrente = 5, phoneAtual = null) {
+  // Retornar cache se válido (5 minutos)
+  if (horariosCache && Date.now() < horariosCacheExpires && !phoneAtual) {
+    console.log('[CALENDAR-NPL] Usando cache de horarios');
+    return horariosCache;
+  }
+
   const calendar = getCalendarClient();
   if (!calendar) {
     console.log('[CALENDAR-NPL] Client não disponível');
@@ -325,6 +335,11 @@ async function getHorariosDisponiveis(diasParaFrente = 5, phoneAtual = null) {
     }
 
     console.log(`[CALENDAR-NPL] ${slots.length} slots disponíveis`);
+
+    // Salvar no cache (5 minutos)
+    horariosCache = slots;
+    horariosCacheExpires = Date.now() + 5 * 60 * 1000;
+
     return slots;
   } catch (e) {
     console.error('[CALENDAR-NPL] Erro ao buscar horários:', e.message);
