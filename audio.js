@@ -96,6 +96,10 @@ async function gerarAudioElevenLabs(texto) {
 
     if (!response.ok) {
       const errText = await response.text();
+      if (errText.includes('quota_exceeded')) {
+        elevenlabsDesativada = true;
+        console.log('[AUDIO-NPL] ElevenLabs sem crédito — desativada até próximo deploy');
+      }
       throw new Error(`ElevenLabs ${response.status}: ${errText.slice(0, 200)}`);
     }
 
@@ -142,15 +146,17 @@ async function gerarAudioOpenAI(texto) {
 }
 
 // ===== GERAR ÁUDIO (tenta ElevenLabs, fallback OpenAI) =====
+let elevenlabsDesativada = false; // cache quando sem crédito
+
 async function gerarAudio(texto) {
-  // Tentar ElevenLabs primeiro (voz natural)
-  if (config.ELEVENLABS_API_KEY) {
+  // Tentar ElevenLabs primeiro (voz natural), pular se já sabemos que está sem crédito
+  if (config.ELEVENLABS_API_KEY && !elevenlabsDesativada) {
     const audio = await gerarAudioElevenLabs(texto);
     if (audio) return audio;
-    console.log('[AUDIO-NPL] ElevenLabs falhou, tentando OpenAI como fallback...');
+    console.log('[AUDIO-NPL] ElevenLabs falhou, usando OpenAI TTS');
   }
 
-  // Fallback para OpenAI TTS
+  // OpenAI TTS (formato Opus nativo do WhatsApp)
   return await gerarAudioOpenAI(texto);
 }
 
