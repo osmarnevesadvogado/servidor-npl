@@ -373,20 +373,6 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
               await whatsapp.sendText(phone, msgConfirmacao);
               await db.saveMessage(conversa.id, 'assistant', msgConfirmacao);
               console.log(`[CONFIRM-NPL] Confirmação enviada para ${nome}`);
-
-              // Enviar áudio de confirmação
-              if (audio) {
-                const tituloAudio = resultado.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
-                const audioConfirm = `${nome}, aqui é a Laura do escritório NPLADVS. ` +
-                  `Sua consulta trabalhista foi confirmada para ${resultado.inicio} ` +
-                  `com ${tituloAudio} ${resultado.colaboradora}. A consulta será online. ` +
-                  `Qualquer dúvida, é só me chamar aqui. Até lá!`;
-                const audioBase64 = await audio.gerarAudio(audioConfirm);
-                if (audioBase64) {
-                  await whatsapp.sendAudio(phone, audioBase64);
-                  console.log(`[CONFIRM-NPL] Áudio de confirmação enviado para ${nome}`);
-                }
-              }
             } catch (e) {
               console.log('[CONFIRM-NPL] Erro ao enviar confirmação:', e.message);
             }
@@ -607,18 +593,7 @@ async function checkLembretesConsulta() {
             `com ${tituloLembrete} ${consulta.colaboradora}. A consulta será online. ` +
             `Nos vemos mais tarde!`;
 
-          // Enviar como áudio
-          if (audio) {
-            const audioBase64 = await audio.gerarAudio(msgTexto);
-            if (audioBase64) {
-              await whatsapp.sendAudio(consulta.telefone, audioBase64);
-              console.log(`[LEMBRETE-NPL] Áudio matinal enviado para ${consulta.nome} (${consulta.telefone})`);
-            } else {
-              await whatsapp.sendText(consulta.telefone, msgTexto);
-            }
-          } else {
-            await whatsapp.sendText(consulta.telefone, msgTexto);
-          }
+          await whatsapp.sendText(consulta.telefone, msgTexto);
           console.log(`[LEMBRETE-NPL] Lembrete matinal (08h) para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro lembrete matinal ${consulta.nome}:`, e.message);
@@ -1096,14 +1071,12 @@ app.post('/api/enviar-audio', requireApiKey, async (req, res) => {
     const { phone, audioBase64, conversaId, usuario_nome } = req.body;
     if (!phone || !audioBase64) return res.status(400).json({ error: 'phone e audioBase64 obrigatorios' });
 
-    // Extrair base64 puro (remover prefixo data:audio/...)
-    const base64Data = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
-
-    const result = await whatsapp.sendAudio(phone, base64Data);
+    const result = await whatsapp.sendAudio(phone, audioBase64);
 
     if (conversaId) {
       // Salvar com media_url para o player do CRM funcionar
-      const mediaUrl = audioBase64.startsWith('data:') ? audioBase64 : `data:audio/ogg;base64,${base64Data}`;
+      const base64Pure = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
+      const mediaUrl = `data:audio/mpeg;base64,${base64Pure}`;
       await db.saveMessage(conversaId, 'assistant', '🎤 Áudio enviado', {
         manual: true,
         usuario_nome: usuario_nome || null,
