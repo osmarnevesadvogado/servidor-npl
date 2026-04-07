@@ -311,9 +311,15 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     await db.saveMessage(conversa.id, 'assistant', reply);
 
     // Se Laura confirmou agendamento, criar evento no Google Calendar
-    // Só dispara quando Laura usa "Agendado!" (formato definido no prompt)
+    // Dispara quando Laura usa palavras de confirmação E menciona dia/hora concreto
     const replyLower = reply.toLowerCase();
-    const agendouConsulta = replyLower.includes('agendado!');
+    const temConfirmacao = replyLower.includes('agendado') || replyLower.includes('agendada') ||
+      replyLower.includes('consulta marcada') || replyLower.includes('consulta confirmada');
+    const temDataHora = /(\d{1,2})\s*(?:h|hrs?|horas?)/.test(replyLower) ||
+      /[àa]s\s+\d{1,2}/.test(replyLower) ||
+      /\d{1,2}\/\d{1,2}/.test(replyLower) ||
+      /(segunda|terça|terca|quarta|quinta|sexta|amanhã|amanha|hoje)/.test(replyLower);
+    const agendouConsulta = temConfirmacao && temDataHora;
     if (calendar && agendouConsulta) {
       // Verificar se já agendou nesta conversa (evitar double booking)
       const agendamentoExistente = await verificarJaAgendou(phone);
