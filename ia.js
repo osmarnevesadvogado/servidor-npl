@@ -282,13 +282,13 @@ function buildFichaLead(lead, history, contexto) {
       const temas = [];
       for (const m of history.slice(0, -1)) {
         if (m.role === 'user' && m.content.length > 5) {
-          temas.push(m.content.slice(0, 80));
+          temas.push(m.content.slice(0, 200));
         }
       }
       if (temas.length > 0) {
         linhas.push(`\nHISTORICO ANTERIOR (lead ja conversou antes):`);
-        linhas.push(`- Mensagens anteriores do lead: "${temas.slice(-8).join('" / "')}"`);
-        linhas.push(`- IMPORTANTE: Demonstre que lembra da conversa anterior. Retome de onde parou. NAO repita perguntas ja feitas.`);
+        linhas.push(`- Mensagens anteriores do lead: "${temas.slice(-40).join('" / "')}"`);
+        linhas.push(`- IMPORTANTE: Voce tem TODA a conversa anterior. Demonstre que lembra. Retome de onde parou. NUNCA repita perguntas ja feitas ou respondidas.`);
       }
     }
   }
@@ -414,17 +414,17 @@ function trimResponse(text) {
   const sentences = protected_.match(/[^.!?]+[.!?]+/g) || [protected_];
   const restored = sentences.map(s => s.replace(/\u0000/g, '.').replace(/\u0001/g, '...'));
 
-  // Permitir ate 5 frases e 600 chars para respostas mais completas
-  const result = restored.slice(0, 5).join(' ').trim();
-  if (result.length > 600) {
-    return restored.slice(0, 4).join(' ').trim();
+  // Permitir respostas completas sem truncar conteúdo importante
+  const result = restored.slice(0, 15).join(' ').trim();
+  if (result.length > 2000) {
+    return restored.slice(0, 10).join(' ').trim();
   }
   return result;
 }
 
 // ===== HISTÓRICO =====
 function buildRecentHistory(history) {
-  const recent = history.slice(-30);
+  const recent = history.slice(-150);
   return recent.map(m => ({ role: m.role, content: m.content }));
 }
 
@@ -520,8 +520,8 @@ async function generateFollowUp(history, lead, followUpNumber) {
   const nome = (lead && lead.nome && !lead.nome.startsWith('WhatsApp')) ? lead.nome : 'amigo(a)';
   const detalhe = lead?.notas || 'questao trabalhista';
 
-  const userMsgs = (history || []).filter(m => m.role === 'user').map(m => m.content.slice(0, 100));
-  const resumo = userMsgs.length > 0 ? userMsgs.slice(-3).join(' / ') : 'sem mensagens anteriores';
+  const userMsgs = (history || []).filter(m => m.role === 'user').map(m => m.content.slice(0, 300));
+  const resumo = userMsgs.length > 0 ? userMsgs.slice(-10).join(' / ') : 'sem mensagens anteriores';
 
   const prompt = `Voce e a Laura, assistente do escritorio NPLADVS (especializado em trabalhista, Belem/PA).
 O lead "${nome}" conversou com voce sobre "${detalhe}" mas parou de responder.
@@ -543,7 +543,7 @@ Regras:
   try {
     const response = await anthropic.messages.create({
       model: config.CLAUDE_MODEL,
-      max_tokens: 150,
+      max_tokens: 500,
       messages: [{ role: 'user', content: prompt }]
     });
 
