@@ -414,10 +414,10 @@ function trimResponse(text) {
   const sentences = protected_.match(/[^.!?]+[.!?]+/g) || [protected_];
   const restored = sentences.map(s => s.replace(/\u0000/g, '.').replace(/\u0001/g, '...'));
 
-  // Permitir respostas completas sem truncar conteúdo importante
-  const result = restored.slice(0, 15).join(' ').trim();
-  if (result.length > 2000) {
-    return restored.slice(0, 10).join(' ').trim();
+  // Respostas objetivas mas sem cortar conteúdo importante
+  const result = restored.slice(0, 6).join(' ').trim();
+  if (result.length > 800) {
+    return restored.slice(0, 4).join(' ').trim();
   }
   return result;
 }
