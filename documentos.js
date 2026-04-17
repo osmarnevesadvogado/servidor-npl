@@ -395,6 +395,108 @@ function gerarCobrancaDocumentos(auditoria, nomeCliente) {
   return msg;
 }
 
+// ===== ANÁLISE DETALHADA DE DOCUMENTO (Claude Vision + extração) =====
+
+async function analisarDocumento(mediaUrl, mediaType, clienteNome = '', clienteCpf = '') {
+  try {
+    // Download da mídia
+    const buffer = await downloadMidia(mediaUrl);
+    if (!buffer) {
+      return { ok: false, error: 'Falha ao baixar a midia' };
+    }
+
+    const isImage = (mediaType || '').startsWith('image/') || mediaType === 'image';
+    const isPdf = (mediaType || '').includes('pdf') || mediaType === 'document';
+
+    // Só processa imagens (Claude Vision não aceita PDF diretamente)
+    if (!isImage && !isPdf) {
+      return { ok: false, error: 'Tipo de mídia não suportado para análise' };
+    }
+
+    // Se for PDF, por enquanto retornar nome genérico baseado no caption
+    if (isPdf && !isImage) {
+      return {
+        ok: true,
+        tipo: 'outro',
+        nome_sugerido: `Documento - ${clienteNome || 'Cliente'}.pdf`,
+        dados_extraidos: { observacao: 'PDF — análise detalhada não disponível' }
+      };
+    }
+
+    const base64 = buffer.toString('base64');
+    const mime = (mediaType || '').startsWith('image/') ? mediaType
+      : mediaType === 'image' ? 'image/jpeg'
+      : 'image/jpeg';
+    const mediaTypeClaude = mime.includes('png') ? 'image/png'
+      : mime.includes('webp') ? 'image/webp'
+      : 'image/jpeg';
+
+    const prompt = `Voce e um analista de documentos juridicos trabalhistas brasileiros. Analise a imagem e retorne APENAS um JSON valido (sem markdown, sem crases) com esta estrutura:
+
+{
+  "tipo": "rg" | "cpf" | "ctps" | "holerite" | "contracheque" | "laudo_medico" | "cid" | "contrato_honorarios" | "procuracao" | "comprovante_residencia" | "certidao" | "contrato_trabalho" | "termo_rescisao" | "hipossuficiencia" | "outro",
+  "nome_sugerido": "nome descritivo do arquivo sem extensao",
+  "dados_extraidos": {
+    "nome": "nome da pessoa se identificavel",
+    "cpf": "CPF se visivel",
+    "rg": "RG se visivel",
+    "data_emissao": "se visivel (formato DD/MM/AAAA)",
+    "data_nascimento": "se visivel",
+    "empresa": "nome da empresa empregadora se aplicavel",
+    "cargo": "se aplicavel",
+    "valor": "valor em R$ se aplicavel (holerite, rescisao)",
+    "periodo": "mes/ano ou periodo se aplicavel",
+    "observacoes": "detalhes relevantes do documento"
+  }
+}
+
+Cliente esperado: ${clienteNome || 'nao informado'}${clienteCpf ? ' (CPF: ' + clienteCpf + ')' : ''}
+
+Regras:
+- Se um campo nao estiver visivel, omita-o do JSON (nao coloque null ou string vazia)
+- nome_sugerido deve ser descritivo (ex: "RG - Joao Silva", "Holerite Janeiro 2024 - Joao Silva", "CTPS Folha 15 - Joao Silva")
+- Use nome do cliente esperado no nome_sugerido quando fizer sentido
+- Valores monetarios no formato "R$ 1.234,56"
+- Retorne SOMENTE o JSON, nada mais`;
+
+    const response = await claude.messages.create({
+      model: 'claude-opus-4-7',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaTypeClaude, data: base64 } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    });
+
+    const texto = response.content[0].text.trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(texto);
+    } catch {
+      const match = texto.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { parsed = JSON.parse(match[0]); }
+        catch { return { ok: false, error: 'Resposta da IA nao e JSON valido' }; }
+      } else {
+        return { ok: false, error: 'Resposta da IA nao e JSON valido' };
+      }
+    }
+
+    return {
+      ok: true,
+      tipo: parsed.tipo || 'outro',
+      nome_sugerido: parsed.nome_sugerido || `Documento - ${clienteNome || 'Cliente'}`,
+      dados_extraidos: parsed.dados_extraidos || {}
+    };
+  } catch (e) {
+    console.error('[DOCS-NPL] Erro na análise:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   DOCUMENTOS_OBRIGATORIOS,
   buscarMidiasWhatsApp,
@@ -402,5 +504,6 @@ module.exports = {
   organizarDocumentos,
   gerarAuditoria,
   gerarRelatorioWhatsApp,
-  gerarCobrancaDocumentos
+  gerarCobrancaDocumentos,
+  analisarDocumento
 };

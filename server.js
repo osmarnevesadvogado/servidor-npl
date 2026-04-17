@@ -1016,6 +1016,25 @@ app.get('/api/analytics', async (req, res) => {
 // ===== AGENTE ORGANIZADOR DE DOCUMENTOS =====
 
 // Organizar documentos de um cliente (sob demanda)
+// Analisar documento via Claude Vision (identifica tipo + extrai dados)
+app.post('/api/documentos/analisar', requireApiKey, async (req, res) => {
+  try {
+    if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
+
+    const { mediaUrl, mediaType, clienteNome, clienteCpf } = req.body;
+    if (!mediaUrl) return res.status(400).json({ error: 'mediaUrl obrigatório' });
+
+    const resultado = await documentos.analisarDocumento(mediaUrl, mediaType || '', clienteNome || '', clienteCpf || '');
+    if (!resultado.ok) {
+      return res.status(500).json({ ok: false, error: resultado.error || 'Erro ao analisar documento' });
+    }
+    res.json(resultado);
+  } catch (e) {
+    console.error('[DOCS-NPL] Erro no endpoint analisar:', e.message);
+    res.status(500).json({ error: 'Erro ao analisar documento' });
+  }
+});
+
 app.post('/api/documentos/organizar', requireApiKey, async (req, res) => {
   try {
     if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
