@@ -23,6 +23,7 @@ O CRM frontend (hospedado no GitHub Pages, repositório separado) chama diretame
 | POST | `/api/pausar` | Pausar IA `{phone, minutes}` |
 | POST | `/api/retomar` | Retomar IA `{phone}` |
 | POST | `/api/chat` | Proxy Claude para CRM `{system, messages}` |
+| POST | `/api/documentos/analisar` | Analisar doc via Claude Vision `{mediaUrl, mediaType, clienteNome, clienteCpf}` → `{ok, tipo, nome_sugerido, dados_extraidos}` |
 | POST | `/api/documentos/organizar` | Organizar docs `{phone, nome, tese}` |
 | POST | `/api/documentos/cobrar` | Cobrar docs `{phone, nome, auditoria}` |
 | POST | `/api/relatorio-semanal` | Disparar relatório |
