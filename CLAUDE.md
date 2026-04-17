@@ -28,6 +28,8 @@ O CRM frontend (hospedado no GitHub Pages, repositório separado) chama diretame
 | POST | `/api/documentos/cobrar` | Cobrar docs `{phone, nome, auditoria}` |
 | POST | `/api/relatorio-semanal` | Disparar relatório |
 | GET | `/api/pausar/status?phone=X` | Verificar se IA está pausada para um telefone |
+| POST | `/webhook/zapi` | Webhook da Laura (processa com IA) |
+| POST | `/webhook/zapi-escritorio` | Webhook do escritório (só salva, sem IA). Conversas com `origem_numero = 'escritorio'` |
 
 ### Resposta do /api/analytics
 ```json

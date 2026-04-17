@@ -711,7 +711,102 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-// ===== WEBHOOK Z-API =====
+// ===== WEBHOOK Z-API — ESCRITÓRIO (só salva, sem IA) =====
+app.post('/webhook/zapi-escritorio', async (req, res) => {
+  try {
+    res.json({ ok: true });
+
+    const body = req.body;
+    const isFromMe = body.fromMe || body.isFromMe;
+    const isMessage = body.type === 'ReceivedCallback' || body.text?.message || body.body;
+    if (!isMessage && !isFromMe) return;
+
+    const phone = isFromMe
+      ? (body.phone || body.to?.replace('@c.us', '') || '')
+      : (body.phone || body.from?.replace('@c.us', '') || '');
+    if (!phone) return;
+
+    const text = body.text?.message || body.body || '';
+    const tel = whatsapp.cleanPhone(phone);
+
+    // Detectar mídia
+    const imageData = body.image || body.imageMessage || null;
+    const documentData = body.document || body.documentMessage || null;
+    const videoData = body.video || body.videoMessage || null;
+    const audioData = body.audio || body.audioMessage || null;
+
+    let mediaUrl = null;
+    let mediaType = null;
+    let content = text;
+
+    if (imageData) {
+      mediaUrl = imageData.imageUrl || imageData.url || imageData.mediaUrl || null;
+      mediaType = 'image';
+      content = imageData.caption || text || '📷 Imagem';
+    } else if (documentData) {
+      mediaUrl = documentData.documentUrl || documentData.url || documentData.mediaUrl || null;
+      mediaType = 'document';
+      content = documentData.fileName || text || '📄 Documento';
+    } else if (videoData) {
+      mediaUrl = videoData.videoUrl || videoData.url || videoData.mediaUrl || null;
+      mediaType = 'video';
+      content = videoData.caption || text || '🎥 Vídeo';
+    } else if (audioData) {
+      mediaUrl = audioData.audioUrl || audioData.url || audioData.mediaUrl || null;
+      mediaType = 'audio';
+      content = text || '🎤 Áudio';
+    }
+
+    if (!content && !mediaUrl) return;
+
+    // Buscar ou criar conversa com origem_numero = 'escritorio'
+    let { data: conv } = await db.supabase
+      .from('conversas')
+      .select('id')
+      .eq('telefone', tel)
+      .eq('status', 'ativa')
+      .eq('escritorio', 'npl')
+      .eq('origem_numero', 'escritorio')
+      .order('criado_em', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!conv) {
+      const { data: newConv } = await db.supabase
+        .from('conversas')
+        .insert({
+          telefone: tel,
+          titulo: 'WhatsApp Escritório',
+          escritorio: 'npl',
+          origem_numero: 'escritorio'
+        })
+        .select('id')
+        .single();
+      conv = newConv;
+    }
+
+    if (!conv) return;
+
+    // Salvar mensagem
+    const role = isFromMe ? 'assistant' : 'user';
+    const extra = {
+      origem_numero: 'escritorio',
+      ...(mediaUrl && { media_url: mediaUrl }),
+      ...(mediaType && { media_type: mediaType }),
+      ...(isFromMe && { manual: true })
+    };
+
+    await db.supabase
+      .from('mensagens')
+      .insert({ conversa_id: conv.id, role, content, ...extra });
+
+    console.log(`[ESCRITORIO-NPL] ${role === 'user' ? 'Recebida' : 'Enviada'}: ${tel} - ${content.slice(0, 60)}`);
+  } catch (e) {
+    console.error('[ESCRITORIO-NPL] Erro:', e.message);
+  }
+});
+
+// ===== WEBHOOK Z-API — LAURA =====
 app.post('/webhook/zapi', async (req, res) => {
   try {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
