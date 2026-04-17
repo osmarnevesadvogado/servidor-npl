@@ -477,6 +477,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
   }
 }
 
+// Formata telefone como (DDD) XXXXX-XXXX (ou variações)
+function formatarTelefone(tel) {
+  if (!tel) return 'Contato';
+  const limpo = tel.replace(/\D/g, '');
+  // Remove DDI 55 se presente
+  const sem55 = limpo.startsWith('55') ? limpo.slice(2) : limpo;
+  if (sem55.length === 11) return `(${sem55.slice(0,2)}) ${sem55.slice(2,7)}-${sem55.slice(7)}`;
+  if (sem55.length === 10) return `(${sem55.slice(0,2)}) ${sem55.slice(2,6)}-${sem55.slice(6)}`;
+  return `(${tel})`;
+}
+
 function isHotLead(text) {
   const lower = text.toLowerCase();
   return config.HOT_LEAD_KEYWORDS.some(kw => lower.includes(kw));
@@ -759,10 +770,16 @@ app.post('/webhook/zapi-escritorio', async (req, res) => {
 
     if (!content && !mediaUrl) return;
 
+    // Extrair nome do contato (senderName/pushName) ou formatar número como fallback
+    const senderName = body.senderName || body.pushName || body.notifyName || body.chatName || '';
+    const nomeContato = senderName && !senderName.startsWith('+') && senderName.length > 2
+      ? senderName
+      : formatarTelefone(tel);
+
     // Buscar ou criar conversa com origem_numero = 'escritorio'
     let { data: conv } = await db.supabase
       .from('conversas')
-      .select('id')
+      .select('id, titulo')
       .eq('telefone', tel)
       .eq('status', 'ativa')
       .eq('escritorio', 'npl')
@@ -776,13 +793,19 @@ app.post('/webhook/zapi-escritorio', async (req, res) => {
         .from('conversas')
         .insert({
           telefone: tel,
-          titulo: 'WhatsApp Escritório',
+          titulo: nomeContato,
           escritorio: 'npl',
           origem_numero: 'escritorio'
         })
-        .select('id')
+        .select('id, titulo')
         .single();
       conv = newConv;
+    } else if (senderName && senderName.length > 2 && (!conv.titulo || conv.titulo === 'WhatsApp Escritório' || conv.titulo.startsWith('('))) {
+      // Atualizar título se ainda não tem nome real
+      await db.supabase
+        .from('conversas')
+        .update({ titulo: nomeContato })
+        .eq('id', conv.id);
     }
 
     if (!conv) return;
