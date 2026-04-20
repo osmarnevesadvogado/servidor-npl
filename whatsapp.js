@@ -143,14 +143,68 @@ function detectarInstancia(body) {
   return 'escritorio';
 }
 
-// Verificar se está em horário comercial (Belém, seg-sex)
-function isHorarioComercial() {
+// Cache de dias não úteis (feriados + enforcados do escritório)
+let diasNaoUteisCache = null;
+let diasNaoUteisCacheExpira = 0;
+
+async function getDiasNaoUteis() {
+  // Cache de 1 hora
+  if (diasNaoUteisCache && Date.now() < diasNaoUteisCacheExpira) {
+    return diasNaoUteisCache;
+  }
+  try {
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_KEY);
+    const { data } = await supabase
+      .from('dias_nao_uteis')
+      .select('data, tipo, descricao')
+      .eq('escritorio', 'npl')
+      .gte('data', new Date().toISOString().slice(0, 10));
+
+    diasNaoUteisCache = (data || []).map(d => d.data);
+    diasNaoUteisCacheExpira = Date.now() + 60 * 60 * 1000;
+    return diasNaoUteisCache;
+  } catch (e) {
+    console.log('[WHATSAPP-NPL] Erro ao buscar dias nao uteis:', e.message);
+    return [];
+  }
+}
+
+function limparCacheDiasNaoUteis() {
+  diasNaoUteisCache = null;
+  diasNaoUteisCacheExpira = 0;
+}
+
+// Verificar se está em horário comercial (Belém, seg-sex, sem feriados/enforcados)
+async function isHorarioComercial() {
   const agora = new Date();
   const belemHour = parseInt(agora.toLocaleString('en-US', { timeZone: 'America/Belem', hour: 'numeric', hour12: false }));
-  const belemDay = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Belem' })).getDay();
+  const belemDate = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Belem' }));
+  const belemDay = belemDate.getDay();
   // 0=domingo, 6=sábado
   const isWeekday = belemDay >= 1 && belemDay <= 5;
-  return isWeekday && belemHour >= config.OFFICE_HOURS_START && belemHour < config.OFFICE_HOURS_END;
+  if (!isWeekday) return false;
+  if (belemHour < config.OFFICE_HOURS_START || belemHour >= config.OFFICE_HOURS_END) return false;
+
+  // Verificar feriados nacionais (via calendar.js)
+  try {
+    const calendar = require('./calendar');
+    const ano = belemDate.getFullYear();
+    const mes = belemDate.getMonth();
+    const dia = belemDate.getDate();
+    // Acessar FERIADOS através de uma função exposta ou reimplementar
+    const dateStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const diasNaoUteis = await getDiasNaoUteis();
+    if (diasNaoUteis.includes(dateStr)) {
+      return false;
+    }
+    // Feriado nacional (do calendar)
+    if (calendar.isFeriadoNacional && calendar.isFeriadoNacional(ano, mes, dia)) {
+      return false;
+    }
+  } catch (e) {}
+
+  return true;
 }
 
 function cleanup() {
@@ -172,5 +226,7 @@ module.exports = {
   detectarInstancia,
   isHorarioComercial,
   getInstanceConfig,
+  limparCacheDiasNaoUteis,
+  getDiasNaoUteis,
   cleanup
 };
