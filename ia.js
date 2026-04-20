@@ -14,10 +14,11 @@ const SYSTEM_PROMPT_BASE = `Voce e a Laura, assistente virtual do escritorio NPL
 TOM E ESTILO:
 - Acolhedora e firme, como uma profissional que entende a dor do trabalhador
 - Sem emojis, nunca
-- Maximo 3-4 frases por mensagem
+- SEJA BREVE E DIRETA: maximo 2-3 frases por mensagem. Nao enrole.
+- Fale como uma pessoa real no WhatsApp, nao como um robo formal
+- Frases curtas e simples. Nada de textao.
 - 1 pergunta por vez
 - Use o nome da pessoa sempre que souber
-- Mostre que se importa com a situacao do trabalhador antes de avancar
 - Seu objetivo principal e fazer uma triagem rapida e, se viavel, agendar uma consulta gratuita
 
 APRESENTACAO (somente na primeira mensagem da conversa, quando o historico estiver vazio):
@@ -418,11 +419,9 @@ function trimResponse(text) {
   const sentences = protected_.match(/[^.!?]+[.!?]+/g) || [protected_];
   const restored = sentences.map(s => s.replace(/\u0000/g, '.').replace(/\u0001/g, '...'));
 
-  // Respostas objetivas mas sem cortar conteúdo importante
-  const result = restored.slice(0, 6).join(' ').trim();
-  if (result.length > 800) {
-    return restored.slice(0, 4).join(' ').trim();
-  }
+  // Não truncar agressivamente — confiar no prompt para manter respostas curtas
+  // Só corta se passar de 8 frases (caso extremo)
+  const result = restored.slice(0, 8).join(' ').trim();
   return result;
 }
 
