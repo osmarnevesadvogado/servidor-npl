@@ -217,9 +217,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     const lead = await db.getOrCreateLead(phone, finalName);
     const conversa = await db.getOrCreateConversa(phone);
 
-    // Vincular lead a conversa
-    if (lead && conversa && !conversa.lead_id) {
-      await db.updateConversa(conversa.id, { lead_id: lead.id, titulo: finalName || conversa.titulo });
+    // Vincular lead a conversa e atualizar título se necessário
+    if (lead && conversa) {
+      const tituloIdeal = (finalName && finalName.trim()) || lead.nome || conversa.titulo;
+      const precisaAtualizar = !conversa.lead_id ||
+        !conversa.titulo ||
+        conversa.titulo === 'WhatsApp' ||
+        conversa.titulo.startsWith('WhatsApp ') ||
+        /^\+?\(?\d{1,3}\)?/.test(conversa.titulo);
+      if (precisaAtualizar) {
+        await db.updateConversa(conversa.id, { lead_id: lead.id, titulo: tituloIdeal });
+      }
     }
 
     // Salvar mensagem
@@ -348,6 +356,23 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     }
 
     const reply = ia.trimResponse(rawReply);
+
+    // Detectar loop de despedida: se últimas 2 respostas da Laura já foram
+    // despedidas ("até mais", "tenha um otimo"...), pausar a IA automaticamente
+    const ehDespedida = /(até mais|ate mais|tenha um (otimo|ótimo|excelente|bom)|boa sorte|te desejo|obrigada pela paciencia|obrigada pela paciência)/i.test(reply);
+    if (ehDespedida) {
+      const assistantRecentes = (history || []).filter(m => m.role === 'assistant').slice(-2);
+      const despedidasAnteriores = assistantRecentes.filter(m =>
+        /(até mais|ate mais|tenha um (otimo|ótimo|excelente|bom)|boa sorte|te desejo)/i.test(m.content)
+      );
+      if (despedidasAnteriores.length >= 2) {
+        console.log(`[LOOP-NPL] Loop de despedida detectado para ${phone} — pausando IA 24h`);
+        pauseAI(phone, 60 * 24); // pausa 24h para não ficar em loop
+        await db.saveMessage(conversa.id, 'assistant', reply);
+        return; // NÃO envia a resposta para o lead
+      }
+    }
+
     await db.saveMessage(conversa.id, 'assistant', reply);
 
     // Se Laura confirmou agendamento, criar evento no Google Calendar
@@ -812,7 +837,7 @@ app.post('/webhook/zapi-escritorio', async (req, res) => {
     if (!content && !mediaUrl) return;
 
     // Extrair nome do contato (senderName/pushName) ou formatar número como fallback
-    const senderName = body.senderName || body.pushName || body.notifyName || body.chatName || '';
+    const senderName = whatsapp.limparNomeContato(body.senderName || body.pushName || body.notifyName || body.chatName || '');
     const nomeContato = senderName && !senderName.startsWith('+') && senderName.length > 2
       ? senderName
       : formatarTelefone(tel);
@@ -945,7 +970,7 @@ app.post('/webhook/zapi', async (req, res) => {
     let text = body.text?.message || body.body || '';
     // Limitar tamanho da mensagem para evitar abuso
     if (text.length > 5000) text = text.slice(0, 5000);
-    const senderName = body.senderName || body.notifyName || '';
+    const senderName = whatsapp.limparNomeContato(body.senderName || body.pushName || body.notifyName || body.chatName || '');
     const audioUrl = body.audio?.audioUrl || body.audioMessage?.url || body.audio?.url || body.audio?.mediaUrl || body.audioMessage?.audioUrl || body.audioMessage?.mediaUrl || null;
     const isAudio = body.isAudio === true || !!body.audioMessage || (!!audioUrl && audioUrl.length > 10);
 

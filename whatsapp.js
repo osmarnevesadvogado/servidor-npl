@@ -12,6 +12,27 @@ function cleanPhone(phone) {
   return p;
 }
 
+// Limpa pushName/senderName — se vier com descrição de cargo/empresa,
+// pegar só o nome próprio (primeiras 2-3 palavras que começam com maiúscula)
+function limparNomeContato(nome) {
+  if (!nome) return '';
+  const limpo = nome.trim();
+  // Palavras que indicam que NÃO é apenas nome (vem com cargo/empresa)
+  const palavrasNaoNome = /(time|equipe|setor|comercial|corporativo|tecnico|técnico|vendas|empresa|escritorio|escritório|do |da |de |dos |das )/i;
+  if (!palavrasNaoNome.test(limpo)) return limpo;
+  // Tem palavras de cargo — extrair só o nome próprio do começo
+  const palavras = limpo.split(/\s+/);
+  const nomeProprio = [];
+  for (const p of palavras) {
+    // Para na primeira palavra minúscula ou palavra-cargo
+    if (/^[a-záéíóúâêîôûãõç]/.test(p)) break;
+    if (palavrasNaoNome.test(p)) break;
+    nomeProprio.push(p);
+    if (nomeProprio.length >= 3) break;
+  }
+  return nomeProprio.length > 0 ? nomeProprio.join(' ') : limpo.split(' ')[0];
+}
+
 // Retorna base URL e client token da instância correta
 function getInstanceConfig(instancia) {
   if (instancia === 'prospeccao' && config.ZAPI_INSTANCE_PROSPECCAO) {
@@ -231,5 +252,6 @@ module.exports = {
   getInstanceConfig,
   limparCacheDiasNaoUteis,
   getDiasNaoUteis,
+  limparNomeContato,
   cleanup
 };

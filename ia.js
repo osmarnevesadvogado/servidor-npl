@@ -82,6 +82,8 @@ REGRAS DE OURO:
 - Nao repita o que a pessoa disse
 - BLOQUEIOS ABSOLUTOS (NUNCA agendar): prescricao >2 anos, prefeitura, <3 meses, sem interesse
 - Se cair em BLOQUEIO, encerre educadamente. NAO tente convencer.
+- NAO FIQUE EM LOOP DE DESPEDIDAS. Se ja se despediu e o lead responde com outra despedida ("obrigado, até mais"), NAO responda de novo. Apenas se despeca UMA vez ("Até mais, bom trabalho!") e pare. O sistema pausa automaticamente.
+- Contato COMERCIAL/CORPORATIVO (Jusbrasil, vendas, etc) NAO e lead trabalhista. Responda UMA mensagem curta agradecendo e encerre. NAO faca triagem.
 - NUNCA agende 2 consultas na mesma conversa, EXCETO se o lead pedir para REMARCAR
 - REMARCACAO: Se o lead pedir para mudar, trocar ou remarcar a consulta:
   1. PRIMEIRO informe que ja tem um advogado da equipe reservado para aquele horario: "[nome], sua consulta esta marcada para [dia/hora] e um advogado da nossa equipe ja esta reservado para te atender nesse horario. Tem certeza que precisa mudar?"
@@ -113,6 +115,7 @@ INFORMACAO SOBRE PRAZOS:
 - Pode cobrar direitos dos ultimos 5 anos trabalhados
 - Se saiu ha mais de 1 ano, SEMPRE alerte sobre urgencia do prazo
 - Se saiu ha mais de 1,5 ano, trate como URGENTE e priorize agendamento rapido
+- CONTRADICAO DE DATA: Se o lead disser duas datas diferentes (ex: "saí em 2022" e depois "faz 1 ano"), NAO assuma uma das duas. Peça esclarecimento: "[nome], voce havia mencionado que saiu em [data1], mas agora falou [data2]. Qual e a data certa da sua saida? Se preferir, pode verificar na CTPS ou no app do FGTS."
 
 EXEMPLOS:
 
@@ -317,7 +320,10 @@ function buildFichaLead(lead, history, contexto) {
   // "serviços gerais", "servidor de internet" etc. NÃO são governo
   const ePrefeitura = /(prefeitura|governo municipal|orgao municipal|órgão municipal|servidor municipal|câmara municipal|camara municipal|trabalhei (na|pra|para|pro) (a )?prefeitura)/i.test(allText);
   const eGoverno = /(servidor (público|publico|estadual|federal)|trabalh\w+ (no|pro|pra|para o) governo|funcionar\w+ public\w+|orgao publico|órgão público)/i.test(allText) && !/(empresa privada|privado|clt|carteira assinada|fazenda|sitio|sítio|rural|roça|roca|agropecuaria|agropecuária|usina|plantacao|plantação)/i.test(allText);
-  const semInteresse = /(nao quero|não quero|nao tenho interesse|não tenho interesse|so queria saber|só queria saber|obrigado mas nao|obrigado mas não|nao preciso|não preciso)/i.test(allText);
+  const semInteresse = /(nao quero|não quero|nao tenho interesse|não tenho interesse|so queria saber|só queria saber|obrigado mas nao|obrigado mas não|nao preciso|não preciso|nao tenho (nenhuma )?(questao|caso|problema|causa) trabalhista|não tenho (nenhuma )?(questao|caso|problema|causa) trabalhista)/i.test(allText);
+
+  // Detectar contato comercial/corporativo (não é lead trabalhista)
+  const eContatoComercial = /(jusbrasil|sou (do|da) (time |equipe |setor )?(comercial|corporativo|vendas)|contato (comercial|corporativo)|solucoes corporativas|soluções corporativas|entrando em contato com o escritorio|entrando em contato com o escritório)/i.test(allText);
 
   const triagemItens = [];
   if (temTempo) triagemItens.push('tempo de trabalho');
@@ -331,7 +337,8 @@ function buildFichaLead(lead, history, contexto) {
   const bloqueios = [];
   if (ePrefeitura) bloqueios.push('PREFEITURA/GOVERNO MUNICIPAL — NAO AGENDAR. Informe que o escritorio e especializado em CLT privada.');
   if (eGoverno) bloqueios.push('POSSIVEL SERVIDOR PUBLICO — Confirme se e empresa privada ou governo antes de agendar.');
-  if (semInteresse) bloqueios.push('LEAD SEM INTERESSE — NAO insista, encerre educadamente.');
+  if (semInteresse) bloqueios.push('LEAD SEM INTERESSE — NAO insista, encerre educadamente com UMA mensagem curta.');
+  if (eContatoComercial) bloqueios.push('CONTATO COMERCIAL/CORPORATIVO — NAO e um caso trabalhista, NAO faca triagem. Responda UMA vez: "Obrigada pelo contato. Nossa equipe administrativa vai analisar." e encerre. NAO mande mensagens de despedida repetidas.');
 
   const triagemCompleta = temNome && temTempo && temCarteira && temPrazo;
   const triagemMinima = temNome && (temTempo || temPrazo); // minimo para avaliar viabilidade
@@ -354,10 +361,12 @@ function buildFichaLead(lead, history, contexto) {
   }
 
   // Proximo passo
-  if (bloqueios.length > 0 && !semInteresse) {
+  if (eContatoComercial) {
+    linhas.push(`\nPROXIMO PASSO: CONTATO COMERCIAL. Responda UMA unica mensagem curta ("Obrigada pelo contato. Nossa equipe administrativa vai avaliar.") e encerre. NAO pergunte triagem. NAO insista.`);
+  } else if (bloqueios.length > 0 && !semInteresse) {
     linhas.push(`\nPROXIMO PASSO: BLOQUEIO. Informe o lead educadamente conforme as regras. NAO agende.`);
   } else if (semInteresse) {
-    linhas.push(`\nPROXIMO PASSO: Lead sem interesse. Despeca-se educadamente. NAO insista.`);
+    linhas.push(`\nPROXIMO PASSO: Lead sem interesse. Despeca-se educadamente com UMA mensagem. NAO insista.`);
   } else if (contexto && contexto.tipo === 'cliente') {
     linhas.push(`\nPROXIMO PASSO: E CLIENTE. Atenda conforme o pedido. Se quiser agendar, ofereca horarios.`);
   } else if (contexto && contexto.tipo === 'cliente_processo') {
