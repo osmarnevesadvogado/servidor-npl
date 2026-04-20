@@ -779,5 +779,6 @@ module.exports = {
   formatarSlot: formatarSlotDate,
   reservarSlot,
   agoraBelem,
-  COLABORADORAS
+  COLABORADORAS,
+  isFeriadoNacional: isFeriado
 };

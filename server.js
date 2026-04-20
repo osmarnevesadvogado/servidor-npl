@@ -877,7 +877,7 @@ app.post('/webhook/zapi', async (req, res) => {
     const instancia = whatsapp.detectarInstancia(body);
 
     // Número 01 (escritório): Laura silenciosa durante horário comercial
-    if (instancia === 'escritorio' && whatsapp.isHorarioComercial() && !isFromMe) {
+    if (instancia === 'escritorio' && !isFromMe && await whatsapp.isHorarioComercial()) {
       // Salvar mensagem mas não responder (equipe atende)
       const phone = body.phone || body.from?.replace('@c.us', '') || '';
       if (phone) {
@@ -1146,6 +1146,76 @@ app.get('/api/pausar/status', (req, res) => {
   if (!phone) return res.status(400).json({ error: 'phone obrigatorio' });
   const paused = isAIPaused(phone);
   res.json({ phone: whatsapp.cleanPhone(phone), paused });
+});
+
+// ===== DIAS NÃO ÚTEIS (feriados municipais, enforcados, férias da equipe) =====
+
+// Listar dias não úteis futuros
+app.get('/api/dias-nao-uteis', async (req, res) => {
+  try {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const { data, error } = await db.supabase
+      .from('dias_nao_uteis')
+      .select('*')
+      .eq('escritorio', 'npl')
+      .gte('data', hoje)
+      .order('data', { ascending: true });
+    if (error) throw error;
+    res.json({ ok: true, dias: data || [] });
+  } catch (e) {
+    console.error('[DIAS-NPL] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao listar dias nao uteis' });
+  }
+});
+
+// Adicionar dia não útil
+app.post('/api/dias-nao-uteis', requireApiKey, async (req, res) => {
+  try {
+    const { data, tipo, descricao } = req.body;
+    if (!data) return res.status(400).json({ error: 'data obrigatoria (formato YYYY-MM-DD)' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return res.status(400).json({ error: 'data deve ser no formato YYYY-MM-DD' });
+    }
+    const tipoFinal = tipo || 'enforcado';
+    const { data: inserted, error } = await db.supabase
+      .from('dias_nao_uteis')
+      .insert({
+        data,
+        tipo: tipoFinal,
+        descricao: descricao || tipoFinal,
+        escritorio: 'npl'
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    // Limpar cache do whatsapp.js
+    whatsapp.limparCacheDiasNaoUteis && whatsapp.limparCacheDiasNaoUteis();
+
+    res.json({ ok: true, dia: inserted });
+  } catch (e) {
+    console.error('[DIAS-NPL] Erro ao adicionar:', e.message);
+    res.status(500).json({ error: 'Erro ao adicionar dia' });
+  }
+});
+
+// Remover dia não útil
+app.delete('/api/dias-nao-uteis/:id', requireApiKey, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await db.supabase
+      .from('dias_nao_uteis')
+      .delete()
+      .eq('id', id)
+      .eq('escritorio', 'npl');
+    if (error) throw error;
+
+    whatsapp.limparCacheDiasNaoUteis && whatsapp.limparCacheDiasNaoUteis();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[DIAS-NPL] Erro ao remover:', e.message);
+    res.status(500).json({ error: 'Erro ao remover dia' });
+  }
 });
 
 app.get('/api/metricas', async (req, res) => {
