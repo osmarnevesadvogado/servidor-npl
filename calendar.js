@@ -114,7 +114,7 @@ function determinarColaboradora(eventosExistentes, dataHoraSlot) {
   return escolhida;
 }
 
-// ===== FERIADOS NACIONAIS 2025-2027 =====
+// ===== FERIADOS NACIONAIS + ESTADUAL PA + MUNICIPAIS BELÉM 2025-2027 =====
 const FERIADOS = [
   // 2025
   '2025-01-01', // Confraternização Universal
@@ -124,10 +124,13 @@ const FERIADOS = [
   '2025-04-21', // Tiradentes
   '2025-05-01', // Dia do Trabalho
   '2025-06-19', // Corpus Christi
+  '2025-08-15', // Adesão do Pará à Independência (estadual)
   '2025-09-07', // Independência
   '2025-10-12', // Nossa Sra. Aparecida
+  '2025-10-13', // Segunda pós-Círio (ponto facultativo Belém)
   '2025-11-02', // Finados
   '2025-11-15', // Proclamação da República
+  '2025-12-08', // Nossa Senhora da Conceição (padroeira de Belém)
   '2025-12-25', // Natal
   // 2026
   '2026-01-01', // Confraternização Universal
@@ -137,10 +140,12 @@ const FERIADOS = [
   '2026-04-21', // Tiradentes
   '2026-05-01', // Dia do Trabalho
   '2026-06-04', // Corpus Christi
+  '2026-08-15', // Adesão do Pará à Independência (estadual)
   '2026-09-07', // Independência
-  '2026-10-12', // Nossa Sra. Aparecida
+  '2026-10-12', // Nossa Sra. Aparecida (coincide com seg pós-Círio 11/10)
   '2026-11-02', // Finados
   '2026-11-15', // Proclamação da República
+  '2026-12-08', // Nossa Senhora da Conceição (padroeira de Belém)
   '2026-12-25', // Natal
   // 2027
   '2027-01-01', // Confraternização Universal
@@ -150,10 +155,13 @@ const FERIADOS = [
   '2027-04-21', // Tiradentes
   '2027-05-01', // Dia do Trabalho
   '2027-05-27', // Corpus Christi
+  '2027-08-15', // Adesão do Pará à Independência (estadual)
   '2027-09-07', // Independência
+  '2027-10-11', // Segunda pós-Círio (ponto facultativo Belém)
   '2027-10-12', // Nossa Sra. Aparecida
   '2027-11-02', // Finados
   '2027-11-15', // Proclamação da República
+  '2027-12-08', // Nossa Senhora da Conceição (padroeira de Belém)
   '2027-12-25', // Natal
 ];
 

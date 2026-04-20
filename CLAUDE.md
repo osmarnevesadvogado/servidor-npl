@@ -135,6 +135,14 @@ Calculado a cada mensagem do lead. Critérios:
 - Estagiária: Luiza
 - Se alguém mencionar um desses nomes, Laura trata como cliente existente em tratativa
 
+## Feriados reconhecidos automaticamente (2025-2027)
+Nacionais + Estadual PA + Municipais Belém:
+- Ano Novo, Carnaval, Sexta-feira Santa, Tiradentes, Dia do Trabalho
+- Corpus Christi, Adesão do Pará (15/08), Independência, Aparecida
+- Segunda pós-Círio, Finados, Proclamação, N.S. Conceição (08/12), Natal
+
+Para feriados adicionais, enforcados e férias da equipe, use a tabela `dias_nao_uteis`.
+
 ## Bloqueios automáticos
 - Prefeitura/governo municipal → não agenda
 - Servidor público → pede confirmação
