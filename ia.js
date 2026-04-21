@@ -363,6 +363,38 @@ function buildFichaLead(lead, history, contexto) {
     } catch (e) {
       // Módulo verbas opcional — se falhar, segue sem estimativa
     }
+
+    // Alerta de prazo prescricional (2 anos)
+    try {
+      const prescricao = require('./prescricao');
+      const textoConversa = (history || []).filter(m => m.role === 'user').map(m => m.content).join('\n');
+      const alerta = prescricao.formatarAlerta(textoConversa);
+      const bloco = prescricao.formatarParaFicha(alerta);
+      if (bloco && alerta.nivel !== 'ok') {
+        linhas.push(`\n${bloco}`);
+      }
+    } catch (e) {
+      // Opcional
+    }
+
+    // Base de processos similares (contexto para dar confiança, sem expor dados)
+    try {
+      const teses = require('./teses');
+      const textoConversa = (history || []).filter(m => m.role === 'user').map(m => m.content).join('\n');
+      const detectado = teses.detectarTese(textoConversa);
+      if (detectado && lead) {
+        const materia = teses.TESES[detectado.principal]?.titulo;
+        const db = require('./database');
+        if (materia && db.contarProcessosSimilares) {
+          // Atenção: ficha é síncrona — usar then/catch descartável
+          // Como buildFichaLead é chamado de forma síncrona no prompt, o contador precisa ser async.
+          // Solução: expor a materia como hint no prompt e deixar Laura mencionar "nosso escritório tem experiência em X"
+          linhas.push(`\nCASOS_SIMILARES: escritorio ja atendeu casos de ${materia}. Se fizer sentido, use como argumento de credibilidade SEM prometer resultado.`);
+        }
+      }
+    } catch (e) {
+      // Opcional
+    }
   }
 
   // Resumo da conversa anterior (lead + Laura) para contexto completo

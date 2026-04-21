@@ -354,6 +354,30 @@ async function createTarefa(tarefa) {
   }
 }
 
+// Conta processos similares (mesma matéria) para dar contexto ao lead sem expor dados pessoais.
+// Usa npl_clientes_processos que tem {materia, status_fase}.
+async function contarProcessosSimilares(materia) {
+  if (!materia || materia.length < 3) return null;
+  try {
+    const m = materia.toLowerCase();
+    const { data } = await supabase
+      .from('npl_clientes_processos')
+      .select('status_fase')
+      .ilike('materia', `%${m}%`)
+      .limit(500);
+    if (!data || data.length === 0) return { total: 0, encerrados: 0, em_andamento: 0 };
+    const encerrados = data.filter(p => /encerrad|arquivad|transitad|finaliz/i.test(p.status_fase || '')).length;
+    return {
+      total: data.length,
+      encerrados,
+      em_andamento: data.length - encerrados
+    };
+  } catch (e) {
+    console.log('[PROCESSOS-SIMILARES] Erro:', e.message);
+    return null;
+  }
+}
+
 // ===== CLIENTES ANTIGOS (busca por nome na planilha importada) =====
 
 async function findClienteProcessoByName(nome) {
@@ -810,6 +834,7 @@ module.exports = {
   getMetricas,
   createTarefa,
   findClienteProcessoByName,
+  contarProcessosSimilares,
   findClienteByPhone,
   findCasoByCliente,
   getContextoCompleto,

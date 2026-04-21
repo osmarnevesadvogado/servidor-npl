@@ -341,6 +341,37 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Gerar e enviar resposta (excluir última msg do history pois já vai na ficha)
     const fullHistory = await db.getHistory(conversa.id);
     const history = fullHistory.slice(0, -1);
+
+    // Tracking de prazo prescricional — se detecta urgência/prescrito, rastreia uma vez
+    try {
+      const prescricao = require('./prescricao');
+      const textoConversa = fullHistory.filter(m => m.role === 'user').map(m => m.content).join('\n');
+      const alerta = prescricao.formatarAlerta(textoConversa);
+      if (alerta && (alerta.nivel === 'urgente' || alerta.nivel === 'prescrito' || alerta.nivel === 'atencao')) {
+        // Dedup: só rastreia se último evento de prescrição for diferente
+        const { data: ultima } = await db.supabase
+          .from('metricas')
+          .select('detalhes')
+          .eq('conversa_id', conversa.id)
+          .eq('evento', 'prazo_prescricional')
+          .order('criado_em', { ascending: false })
+          .limit(1);
+        const nivelAnterior = ultima && ultima[0] ? (() => {
+          try { return JSON.parse(ultima[0].detalhes).nivel; } catch { return null; }
+        })() : null;
+        if (nivelAnterior !== alerta.nivel) {
+          await db.trackEvent(conversa.id, lead?.id, 'prazo_prescricional', JSON.stringify({
+            nivel: alerta.nivel,
+            mesesRestantes: alerta.mesesRestantes,
+            mesesDesdeSaida: alerta.mesesDesdeSaida
+          }));
+          console.log(`[PRESCRICAO-NPL] ${phone}: ${alerta.nivel} (${alerta.mesesRestantes ?? '-'} meses restantes)`);
+        }
+      }
+    } catch (e) {
+      console.log('[PRESCRICAO-NPL] Erro tracking:', e.message);
+    }
+
     const rawReply = await ia.generateResponse(history, combinedText, conversa.id, lead, contexto, phone);
 
     // Se API sem crédito, não enviar nada (silenciar)
