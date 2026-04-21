@@ -272,6 +272,21 @@ async function getLeadById(leadId) {
   return data;
 }
 
+// Lookup read-only por telefone (não cria lead). Usado por jobs agendados.
+async function getLeadByPhone(phone) {
+  if (!phone) return null;
+  const { cleanPhone } = require('./whatsapp');
+  const tel = cleanPhone(phone);
+  const { data } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('telefone', tel)
+    .eq('escritorio', ESC)
+    .limit(1)
+    .maybeSingle();
+  return data || null;
+}
+
 async function listConversas(limit = 50) {
   const { data } = await supabase
     .from('conversas')
@@ -789,6 +804,7 @@ module.exports = {
   getEligibleConversas,
   listLeads,
   getLeadById,
+  getLeadByPhone,
   listConversas,
   getConversaMensagens,
   getMetricas,

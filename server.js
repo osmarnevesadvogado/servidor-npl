@@ -772,35 +772,92 @@ setInterval(() => {
 setTimeout(() => checkFollowUps(), 60 * 1000);
 
 // ===== LEMBRETES DE CONSULTA =====
-// Envia lembrete no dia da consulta às 08h (áudio) e 30min antes (texto)
-const lembretesEnviados = new Set(); // evitar duplicatas: "tipo_eventId"
+// Envia mensagens em múltiplos pontos: 48h (documentos), 24h (confirmação),
+// 08h do dia (matinal), 1h (lembrete), 30min (lembrete final), +2h (no-show).
+// Map chave → timestamp de envio, para dedupe persistente entre dias.
+const lembretesEnviados = new Map();
+
+function jaEnviado(chave) {
+  return lembretesEnviados.has(chave);
+}
+function marcarEnviado(chave) {
+  lembretesEnviados.set(chave, Date.now());
+}
 
 async function checkLembretesConsulta() {
   if (!calendar) return;
   try {
-    const consultas = await calendar.getConsultasDoDia();
-    if (consultas.length === 0) return;
+    // Busca consultas dos próximos 3 dias para alcançar janelas de 48h/24h.
+    const consultasFuturas = await calendar.getConsultas(3);
+    const consultasHoje = await calendar.getConsultasDoDia();
+
+    // Merge por id preservando inicio como Date
+    const porId = new Map();
+    for (const c of consultasFuturas) {
+      porId.set(c.id, { ...c, inicio: new Date(c.inicio) });
+    }
+    for (const c of consultasHoje) porId.set(c.id, c); // hoje já tem Date
+
+    if (porId.size === 0) return;
 
     const belemAgora = calendar.agoraBelem();
     const horaAtual = belemAgora.getUTCHours();
     const minAtual = belemAgora.getUTCMinutes();
+    const agora = Date.now();
 
-    for (const consulta of consultas) {
+    for (const consulta of porId.values()) {
       if (!consulta.telefone) continue;
 
-      const chaveMatinal = `matinal_${consulta.id}`;
-      const chave30min = `30min_${consulta.id}`;
+      const inicioMs = consulta.inicio.getTime();
+      const minFaltando = (inicioMs - agora) / (1000 * 60);
+      const tituloPessoa = consulta.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
 
-      // Lembrete matinal às 08h (áudio)
-      if (horaAtual === 8 && minAtual < 15 && !lembretesEnviados.has(chaveMatinal)) {
-        lembretesEnviados.add(chaveMatinal);
+      // ===== 48h antes: cobrança de documentos =====
+      const chaveDocs = `cobrancaDocs_${consulta.id}`;
+      if (minFaltando >= 46 * 60 && minFaltando <= 50 * 60 && !jaEnviado(chaveDocs)) {
+        marcarEnviado(chaveDocs);
         try {
-          const tituloLembrete = consulta.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
+          const msg = `Oi, ${consulta.nome}! Aqui é a Laura do NPLADVS. ` +
+            `Sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora} está chegando (${consulta.inicioFormatado}).\n\n` +
+            `Para a consulta render mais, se puder, separe:\n` +
+            `- CTPS (carteira de trabalho) ou e-Social\n` +
+            `- 3 últimos holerites / contracheques\n` +
+            `- Contrato de trabalho (se tiver)\n` +
+            `- Qualquer prova do caso (mensagens, fotos, e-mails)\n\n` +
+            `Pode mandar por aqui mesmo, se preferir. Qualquer dúvida me chama!`;
+          await whatsapp.sendText(consulta.telefone, msg);
+          console.log(`[LEMBRETE-NPL] Cobrança de documentos (48h) para ${consulta.nome}`);
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro cobrança docs ${consulta.nome}:`, e.message);
+        }
+      }
+
+      // ===== 24h antes: confirmação =====
+      const chaveConfirm = `confirmacao24h_${consulta.id}`;
+      if (minFaltando >= 22 * 60 && minFaltando <= 26 * 60 && !jaEnviado(chaveConfirm)) {
+        marcarEnviado(chaveConfirm);
+        try {
+          const msg = `${consulta.nome}, passando para confirmar sua consulta trabalhista de amanhã ` +
+            `às ${consulta.inicioFormatado} com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
+            `Vai conseguir comparecer? Se precisar remarcar, me avisa por aqui que eu ajeito.\n\n` +
+            `Estamos te aguardando!`;
+          await whatsapp.sendText(consulta.telefone, msg);
+          console.log(`[LEMBRETE-NPL] Confirmação 24h para ${consulta.nome}`);
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro confirmação 24h ${consulta.nome}:`, e.message);
+        }
+      }
+
+      // ===== Matinal 08h: áudio/texto do dia =====
+      const chaveMatinal = `matinal_${consulta.id}`;
+      const ehHoje = minFaltando > 0 && minFaltando <= 24 * 60;
+      if (ehHoje && horaAtual === 8 && minAtual < 15 && !jaEnviado(chaveMatinal)) {
+        marcarEnviado(chaveMatinal);
+        try {
           const msgTexto = `Bom dia, ${consulta.nome}! Aqui é a Laura do escritório NPLADVS. ` +
             `Passando para lembrar que hoje você tem consulta trabalhista às ${consulta.inicioFormatado} ` +
-            `com ${tituloLembrete} ${consulta.colaboradora}. A consulta será online. ` +
+            `com ${tituloPessoa} ${consulta.colaboradora}. A consulta será online. ` +
             `Nos vemos mais tarde!`;
-
           await whatsapp.sendText(consulta.telefone, msgTexto);
           console.log(`[LEMBRETE-NPL] Lembrete matinal (08h) para ${consulta.nome}`);
         } catch (e) {
@@ -808,24 +865,59 @@ async function checkLembretesConsulta() {
         }
       }
 
-      // Lembrete 30min antes (texto)
-      const inicioConsulta = consulta.inicio.getTime();
-      const agora = Date.now();
-      const minFaltando = (inicioConsulta - agora) / (1000 * 60);
-
-      if (minFaltando > 0 && minFaltando <= 35 && !lembretesEnviados.has(chave30min)) {
-        lembretesEnviados.add(chave30min);
+      // ===== 1h antes: lembrete =====
+      const chave1h = `lembrete1h_${consulta.id}`;
+      if (minFaltando > 45 && minFaltando <= 75 && !jaEnviado(chave1h)) {
+        marcarEnviado(chave1h);
         try {
-          const titulo30 = consulta.colaboradora === 'Luiza' ? 'a colaboradora' : 'a advogada';
-          const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${titulo30} ${consulta.colaboradora} ` +
+          const msg = `${consulta.nome}, faltando 1h para sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
+            `Separe um lugar tranquilo e, se tiver, os documentos (CTPS, holerites, contrato, prints). ` +
+            `O link da reunião chega por aqui antes do horário.`;
+          await whatsapp.sendText(consulta.telefone, msg);
+          console.log(`[LEMBRETE-NPL] Lembrete 1h enviado para ${consulta.nome}`);
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro lembrete 1h ${consulta.nome}:`, e.message);
+        }
+      }
+
+      // ===== 30min antes: lembrete final (existente) =====
+      const chave30min = `lembrete30min_${consulta.id}`;
+      if (minFaltando > 0 && minFaltando <= 35 && !jaEnviado(chave30min)) {
+        marcarEnviado(chave30min);
+        try {
+          const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora} ` +
             `comeca em 30 minutos!\n\n` +
             `O link para a reuniao online sera enviado em instantes.\n\n` +
             `Escritorio NPLADVS - Estamos te aguardando!`;
-
           await whatsapp.sendText(consulta.telefone, msgLembrete);
           console.log(`[LEMBRETE-NPL] Lembrete 30min enviado para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro lembrete 30min ${consulta.nome}:`, e.message);
+        }
+      }
+
+      // ===== +2h após a consulta: re-engajamento de no-show =====
+      // Se lead ainda está na etapa 'agendamento' (não avançou para documentos/cliente),
+      // assume que a consulta não rendeu — manda mensagem de retomada.
+      const chaveNoShow = `noshow_${consulta.id}`;
+      if (minFaltando <= -120 && minFaltando >= -180 && !jaEnviado(chaveNoShow)) {
+        try {
+          const lead = await db.getLeadByPhone(consulta.telefone);
+          // Só dispara se ainda está em 'agendamento' — se já virou documentos/cliente,
+          // a consulta teve desfecho e a advogada está com o lead.
+          if (lead && lead.etapa_funil === 'agendamento') {
+            marcarEnviado(chaveNoShow);
+            const msg = `Oi, ${consulta.nome}! Aqui é a Laura. Não consegui confirmar se sua consulta de hoje rolou. ` +
+              `Deu algum imprevisto? Se precisar, consigo reagendar com ${tituloPessoa} ${consulta.colaboradora} ` +
+              `em outro horário — é só me dizer o melhor dia pra você.`;
+            await whatsapp.sendText(consulta.telefone, msg);
+            console.log(`[LEMBRETE-NPL] Re-engajamento no-show para ${consulta.nome}`);
+          } else {
+            // Marca como "processado" para não checar de novo, mesmo sem enviar.
+            marcarEnviado(chaveNoShow);
+          }
+        } catch (e) {
+          console.log(`[LEMBRETE-NPL] Erro no-show ${consulta.nome}:`, e.message);
         }
       }
     }
@@ -834,24 +926,28 @@ async function checkLembretesConsulta() {
   }
 }
 
-// Verificar lembretes a cada 5 minutos (08h-18h Belém)
+// Verificar lembretes a cada 5 minutos (08h-20h Belém, cobre janelas de 48h/24h fora do horário comercial)
 setInterval(() => {
   const belemHour = new Date().toLocaleString('en-US', { timeZone: 'America/Belem', hour: 'numeric', hour12: false });
   const h = parseInt(belemHour);
-  if (h >= 8 && h <= 18) {
+  if (h >= 8 && h <= 20) {
     checkLembretesConsulta();
   }
 }, 5 * 60 * 1000);
 // Primeira verificação 2min após boot
 setTimeout(() => checkLembretesConsulta(), 2 * 60 * 1000);
 
-// Limpar lembretes enviados à meia-noite (para o dia seguinte)
+// Limpar chaves de lembrete antigas (> 7 dias) para evitar crescimento indefinido do Map
 setInterval(() => {
-  const belemHour = new Date().toLocaleString('en-US', { timeZone: 'America/Belem', hour: 'numeric', hour12: false });
-  if (parseInt(belemHour) === 0) {
-    lembretesEnviados.clear();
-    console.log('[LEMBRETE-NPL] Lembretes limpos para novo dia');
+  const corte = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let removidas = 0;
+  for (const [chave, ts] of lembretesEnviados) {
+    if (ts < corte) {
+      lembretesEnviados.delete(chave);
+      removidas++;
+    }
   }
+  if (removidas > 0) console.log(`[LEMBRETE-NPL] Limpeza: ${removidas} chave(s) antiga(s) removida(s)`);
 }, 60 * 60 * 1000);
 
 // ===== WEBHOOK Z-API — ESCRITÓRIO (só salva, sem IA) =====
