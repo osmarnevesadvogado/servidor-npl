@@ -1444,6 +1444,49 @@ app.get('/api/metricas', async (req, res) => {
   }
 });
 
+// ===== LEADS (endpoints para o funil do CRM) =====
+
+app.get('/api/leads', async (req, res) => {
+  try {
+    const filtros = {};
+    if (req.query.etapa) filtros.etapa = req.query.etapa;
+    if (req.query.limit) filtros.limit = parseInt(req.query.limit);
+    res.json(await db.listLeads(filtros));
+  } catch (e) {
+    console.error('[LEADS] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao buscar leads' });
+  }
+});
+
+app.get('/api/leads/:id', async (req, res) => {
+  try {
+    const lead = await db.getLeadById(req.params.id);
+    if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
+    res.json(lead);
+  } catch (e) {
+    console.error('[LEADS] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao buscar lead' });
+  }
+});
+
+app.put('/api/leads/:id', requireApiKey, async (req, res) => {
+  try {
+    const allowed = ['nome', 'email', 'etapa_funil', 'tese_interesse', 'notas', 'origem'];
+    const updates = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
+    }
+    await db.updateLead(req.params.id, updates);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[LEADS] Erro ao atualizar:', e.message);
+    res.status(500).json({ error: 'Erro ao atualizar lead' });
+  }
+});
+
 // ===== ANALYTICS DE CONVERSÃO =====
 // ===== AGENDAMENTOS (lista consultas do Google Calendar) =====
 app.get('/api/agendamentos', async (req, res) => {

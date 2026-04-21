@@ -240,6 +240,33 @@ async function getEligibleConversas() {
 
 // ===== QUERIES DO CRM =====
 
+async function listLeads(filtros = {}) {
+  let query = supabase
+    .from('leads')
+    .select('id, nome, telefone, email, etapa_funil, tese_interesse, notas, origem, score, score_detalhes, ab_variante, instancia, criado_em, atualizado_em, data_primeiro_contato')
+    .eq('escritorio', ESC)
+    .order('atualizado_em', { ascending: false });
+
+  if (filtros.etapa) query = query.eq('etapa_funil', filtros.etapa);
+  if (filtros.limit) query = query.limit(filtros.limit);
+  else query = query.limit(200);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function getLeadById(leadId) {
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*, conversas(id, status, criado_em)')
+    .eq('id', leadId)
+    .eq('escritorio', ESC)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 async function listConversas(limit = 50) {
   const { data } = await supabase
     .from('conversas')
@@ -754,6 +781,8 @@ module.exports = {
   extractAndUpdateLead,
   trackEvent,
   getEligibleConversas,
+  listLeads,
+  getLeadById,
   listConversas,
   getConversaMensagens,
   getMetricas,
