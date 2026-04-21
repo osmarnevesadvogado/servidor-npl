@@ -43,6 +43,40 @@ function requireApiKey(req, res, next) {
   next();
 }
 
+// ===== AUDITORIA DE ACESSO A DADOS SENSÍVEIS =====
+// Registra tentativas de leitura/escrita/exclusão em recursos sensíveis (leads, mensagens, documentos).
+// Retorna um middleware Express. Uso: app.get('/path', auditAccess('read', 'lead'), handler)
+function auditAccess(acao, recurso) {
+  return (req, res, next) => {
+    // Fire-and-forget: registra antes de continuar a requisição
+    (async () => {
+      try {
+        const usuario = req.headers['x-usuario-nome'] || req.body?.usuario_nome || req.query?.usuario_nome || 'desconhecido';
+        const ip = req.headers['x-forwarded-for'] || req.ip || req.connection?.remoteAddress || '';
+        const resourceId = req.params?.id || req.params?.phone || null;
+        const detalhes = JSON.stringify({
+          acao,
+          recurso,
+          endpoint: req.originalUrl || req.url,
+          metodo: req.method,
+          usuario,
+          ip: (ip || '').toString().split(',')[0].trim(),
+          resource_id: resourceId
+        });
+        await db.supabase.from('metricas').insert({
+          evento: 'auditoria_acesso',
+          detalhes,
+          escritorio: config.ESCRITORIO,
+          criado_em: new Date().toISOString()
+        });
+      } catch (e) {
+        // Não bloquear requisição por falha de auditoria
+      }
+    })();
+    next();
+  };
+}
+
 // ===== BUFFER DE MENSAGENS =====
 const messageBuffer = new Map();
 
@@ -1392,7 +1426,7 @@ app.get('/api/conversas', async (req, res) => {
   }
 });
 
-app.get('/api/conversas/:id/mensagens', async (req, res) => {
+app.get('/api/conversas/:id/mensagens', auditAccess('read', 'mensagens'), async (req, res) => {
   try {
     res.json(await db.getConversaMensagens(req.params.id));
   } catch (e) {
@@ -1795,6 +1829,42 @@ app.get('/api/analise/conversoes', requireApiKey, async (req, res) => {
   }
 });
 
+// ===== LOG DE AUDITORIA (leitura) =====
+// GET /api/auditoria?dias=7&acao=read&recurso=lead&usuario=Maria
+app.get('/api/auditoria', requireApiKey, async (req, res) => {
+  try {
+    const dias = parseInt(req.query.dias) || 7;
+    const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await db.supabase
+      .from('metricas')
+      .select('id, detalhes, criado_em')
+      .eq('evento', 'auditoria_acesso')
+      .gte('criado_em', desde)
+      .order('criado_em', { ascending: false })
+      .limit(1000);
+
+    const filtrarAcao = req.query.acao;
+    const filtrarRecurso = req.query.recurso;
+    const filtrarUsuario = req.query.usuario;
+
+    const registros = (data || []).map(r => {
+      let parsed = {};
+      try { parsed = typeof r.detalhes === 'string' ? JSON.parse(r.detalhes) : (r.detalhes || {}); } catch {}
+      return { id: r.id, criado_em: r.criado_em, ...parsed };
+    }).filter(r => {
+      if (filtrarAcao && r.acao !== filtrarAcao) return false;
+      if (filtrarRecurso && r.recurso !== filtrarRecurso) return false;
+      if (filtrarUsuario && !(r.usuario || '').toLowerCase().includes(filtrarUsuario.toLowerCase())) return false;
+      return true;
+    });
+
+    res.json({ periodo: `${dias} dias`, total: registros.length, registros });
+  } catch (e) {
+    console.error('[AUDITORIA] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao consultar auditoria' });
+  }
+});
+
 // ===== RELATÓRIO POR ADVOGADA =====
 // Conta consultas agendadas por colaboradora + taxa de fechamento
 // (baseado em consulta_agendada no metricas, cruzando com etapa do lead)
@@ -1950,7 +2020,7 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-app.get('/api/leads/:id', async (req, res) => {
+app.get('/api/leads/:id', auditAccess('read', 'lead'), async (req, res) => {
   try {
     const lead = await db.getLeadById(req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
@@ -1963,7 +2033,7 @@ app.get('/api/leads/:id', async (req, res) => {
 
 const ETAPAS_FUNIL_VALIDAS = ['novo', 'contato', 'agendamento', 'documentos', 'cliente', 'perdido'];
 
-app.put('/api/leads/:id', requireApiKey, async (req, res) => {
+app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (req, res) => {
   try {
     const allowed = ['nome', 'email', 'etapa_funil', 'tese_interesse', 'notas', 'origem'];
     const updates = {};
@@ -2079,7 +2149,7 @@ app.post('/api/documentos/organizar', requireApiKey, async (req, res) => {
 });
 
 // Auditoria rápida (sem upload, só verifica o que tem)
-app.get('/api/documentos/auditoria/:phone', async (req, res) => {
+app.get('/api/documentos/auditoria/:phone', auditAccess('read', 'documentos'), async (req, res) => {
   try {
     if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
 
