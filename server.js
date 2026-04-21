@@ -275,6 +275,18 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Extrair dados do lead (nome, subtipo trabalhista)
     if (lead) {
       await db.extractAndUpdateLead(lead.id, combinedText);
+      // Sincronizar titulo da conversa se o nome do lead mudou
+      try {
+        const leadAtualizado = await db.supabase.from('leads').select('nome').eq('id', lead.id).maybeSingle();
+        if (leadAtualizado?.data?.nome && conversa.titulo !== leadAtualizado.data.nome) {
+          const nomeNovo = leadAtualizado.data.nome;
+          const tituloAtual = conversa.titulo || '';
+          const ehFallback = !tituloAtual || tituloAtual.startsWith('WhatsApp') || /^\+?\(?\d/.test(tituloAtual);
+          if (ehFallback) {
+            await db.updateConversa(conversa.id, { titulo: nomeNovo });
+          }
+        }
+      } catch (e) {}
     }
 
     // Processar etapa do fluxo
@@ -611,9 +623,27 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
             }
           } else {
             console.log('[CALENDAR-NPL] Falha ao criar evento (calendar retornou null)');
+            // ALERTA: Laura prometeu agendamento mas o evento não foi criado
+            if (config.OSMAR_PHONE) {
+              const nome = lead?.nome || phone;
+              whatsapp.sendText(config.OSMAR_PHONE,
+                `[LAURA - ALERTA] Agendamento FALHOU para ${nome} (${phone}).\n\n` +
+                `Laura disse "Agendado!" mas o evento nao foi criado no Calendar. ` +
+                `Verificar manualmente e confirmar com o lead.`
+              ).catch(() => {});
+            }
           }
         } else {
           console.log('[CALENDAR-NPL] Não encontrou slot correspondente à escolha do lead');
+          // ALERTA: Laura disse "Agendado!" mas não achou slot
+          if (config.OSMAR_PHONE) {
+            const nome = lead?.nome || phone;
+            whatsapp.sendText(config.OSMAR_PHONE,
+              `[LAURA - ALERTA] Agendamento FALHOU para ${nome} (${phone}).\n\n` +
+              `Laura disse "Agendado!" mas nao encontrou slot no Calendar. ` +
+              `Resposta: "${reply.slice(0, 150)}"\nVerificar e agendar manualmente.`
+            ).catch(() => {});
+          }
         }
       } catch (e) {
         console.log('[CALENDAR-NPL] Erro ao criar evento no agendamento:', e.message);

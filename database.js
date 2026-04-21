@@ -669,6 +669,23 @@ async function calcularScore(leadId, conversaId) {
       score += 20; detalhes.push('quer_agendar');
     }
 
+    // Triagem completa (respondeu perguntas-chave: tempo + carteira + tipo empresa)
+    if (/(ano|anos|mes|meses|mês)/.test(allText) && /(carteira|registro|registrad|assinad)/.test(allText)) {
+      score += 10; detalhes.push('triagem_respondida');
+    }
+    if (/(empresa privada|privada|fazenda|sitio|sítio|rural|indústria|industria|loja|comércio|comercio|restaurante|fábrica|fabrica)/.test(allText)) {
+      score += 5; detalhes.push('tipo_empresa_informado');
+    }
+
+    // Escolheu formato ou horário (forte intenção)
+    if (/(online|presencial|videochamada|video chamada)/.test(allText)) {
+      score += 10; detalhes.push('escolheu_formato');
+    }
+    if (/(segunda|terça|terca|quarta|quinta|sexta|amanhã|amanha|\d{1,2}\s*h)/.test(allText) &&
+        /(pode ser|quero|prefiro|bora|vamos|esse|essa|sim)/.test(allText)) {
+      score += 15; detalhes.push('confirmou_horario');
+    }
+
     // Keywords negativas
     if (/(vou pensar|depois|agora nao|agora não|talvez|não sei|nao sei)/.test(allText)) {
       score -= 10; detalhes.push('hesitante');
