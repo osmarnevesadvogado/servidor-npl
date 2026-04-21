@@ -562,7 +562,9 @@ function trimResponse(text) {
 // ===== HISTÓRICO =====
 function buildRecentHistory(history) {
   const recent = history.slice(-150);
-  return recent.map(m => ({ role: m.role, content: m.content }));
+  return recent
+    .map(m => ({ role: m.role, content: (m.content || '').toString() }))
+    .filter(m => m.content.trim().length > 0);
 }
 
 // ===== GERAR RESPOSTA =====

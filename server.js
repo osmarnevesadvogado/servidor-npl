@@ -2373,7 +2373,9 @@ app.post('/api/chat', requireApiKey, async (req, res) => {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: system || '',
-      messages: messages.map(m => ({ role: m.role, content: m.content }))
+      messages: messages
+        .map(m => ({ role: m.role, content: (m.content || '').toString() }))
+        .filter(m => m.content.trim().length > 0)
     });
     res.json({ ok: true, content: response.content[0].text });
   } catch (e) {
