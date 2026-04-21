@@ -457,6 +457,30 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
               }
             }
 
+            // Gerar resumo executivo do caso (para o advogado que vai atender)
+            if (lead && ia.gerarResumoCaso) {
+              (async () => {
+                try {
+                  const resumo = await ia.gerarResumoCaso(history, lead);
+                  if (resumo) {
+                    const notasAtuais = lead.notas || '';
+                    const marcador = '=== RESUMO DA TRIAGEM (Laura) ===';
+                    // Se já tem resumo antigo, substitui. Se não, concatena no topo.
+                    let novasNotas;
+                    if (notasAtuais.includes(marcador)) {
+                      novasNotas = `${marcador}\n${resumo}\n\n${notasAtuais.split(marcador).slice(1).join(marcador).split('\n\n').slice(1).join('\n\n')}`;
+                    } else {
+                      novasNotas = `${marcador}\n${resumo}${notasAtuais ? '\n\n' + notasAtuais : ''}`;
+                    }
+                    await db.updateLead(lead.id, { notas: novasNotas });
+                    console.log(`[RESUMO-NPL] Resumo salvo nas notas do lead ${nome}`);
+                  }
+                } catch (e) {
+                  console.log('[RESUMO-NPL] Erro ao gerar/salvar resumo:', e.message);
+                }
+              })();
+            }
+
             // Notificar Dr. Osmar sobre o novo agendamento
             await whatsapp.notifyHotLead(
               `CONSULTA AGENDADA: ${nome}`,
@@ -519,6 +543,42 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     if (ehClienteExistente || mencionouEquipeMsg) {
       console.log(`[CLIENTE-NPL] ${phone} em tratativa — pausando IA 24h para advogado atender pelo CRM`);
       pauseAI(phone, 60 * 24);
+    }
+
+    // Detectar objeções para métricas (análise posterior de padrões)
+    try {
+      const objecoesMod = require('./objecoes');
+      const objDetectadas = objecoesMod.detectarObjecoes(combinedText);
+      if (objDetectadas.length > 0 && lead?.id) {
+        const tipos = objDetectadas.map(o => o.tipo).join(',');
+        await db.trackEvent(conversa.id, lead.id, 'objecao', tipos);
+      }
+    } catch (e) {}
+
+    // Detectar tese e atualizar tese_interesse do lead
+    try {
+      if (lead?.id && !lead.tese_interesse) {
+        const teses = require('./teses');
+        const textoCompleto = ((history || []).filter(m => m.role === 'user').map(m => m.content).join(' ') + ' ' + combinedText);
+        const detectado = teses.detectarTese(textoCompleto);
+        if (detectado) {
+          const titulo = teses.TESES[detectado.principal]?.titulo;
+          if (titulo) {
+            await db.updateLead(lead.id, { tese_interesse: titulo });
+            console.log(`[TESE-NPL] Lead ${lead.nome}: tese detectada = ${titulo}`);
+          }
+        }
+      }
+    } catch (e) {}
+
+    // Pedido explícito de falar com humano/advogado — pausa IA para a equipe atender pelo CRM
+    const pediuHumano = /(falar com (um |uma |o |a )?(advogad|atendent|pessoa|humano|alguem|alguém|gente)|nao quero falar com (a )?ia|não quero falar com (a )?ia|quero falar com um humano|quero uma pessoa|prefiro falar com (advogad|humano|pessoa|gente)|tem (advogad|humano|pessoa))/i.test(combinedText);
+    if (pediuHumano) {
+      console.log(`[HUMANO-NPL] ${phone} pediu para falar com advogado — pausando IA 2h`);
+      pauseAI(phone, 120);
+      try {
+        await db.trackEvent(conversa.id, lead?.id, 'pediu_humano', combinedText.slice(0, 100));
+      } catch (e) {}
     }
 
     // Atualizar etapa do funil
@@ -1443,6 +1503,33 @@ app.get('/api/metricas', async (req, res) => {
   } catch (e) {
     console.error('[METRICAS] Erro:', e.message);
     res.status(500).json({ error: 'Erro ao buscar metricas' });
+  }
+});
+
+// ===== CALCULADORA DE VERBAS RESCISÓRIAS =====
+const verbasCalc = require('./verbas');
+
+app.post('/api/verbas/calcular', requireApiKey, (req, res) => {
+  try {
+    const { salario, mesesTrabalho, motivo, carteiraAssinada } = req.body;
+    if (!salario || !mesesTrabalho || !motivo) {
+      return res.status(400).json({ error: 'salario, mesesTrabalho e motivo são obrigatórios' });
+    }
+    if (!Object.values(verbasCalc.MOTIVOS).includes(motivo)) {
+      return res.status(400).json({
+        error: `motivo inválido. Use um de: ${Object.values(verbasCalc.MOTIVOS).join(', ')}`
+      });
+    }
+    const resultado = verbasCalc.calcularRescisao({
+      salario: parseFloat(salario),
+      mesesTrabalho: parseInt(mesesTrabalho),
+      motivo,
+      carteiraAssinada: carteiraAssinada !== false
+    });
+    res.json({ ok: true, ...resultado });
+  } catch (e) {
+    console.error('[VERBAS] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao calcular verbas' });
   }
 });
 
