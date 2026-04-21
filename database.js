@@ -140,7 +140,8 @@ async function updateLead(leadId, updates) {
 }
 
 async function markLeadHot(leadId) {
-  await updateLead(leadId, { etapa_funil: 'proposta' });
+  // Lead quente: apenas rastrea o evento via trackEvent. A etapa só muda quando
+  // agenda consulta (→ agendamento), envia documentos (→ documentos) ou fecha (→ cliente).
 }
 
 // Extrair dados do lead automaticamente das mensagens
@@ -234,7 +235,11 @@ async function getEligibleConversas() {
   if (!data) return [];
 
   return data.filter(c =>
-    c.leads && c.leads.etapa_funil !== 'convertido' && c.leads.etapa_funil !== 'perdido' && c.leads.etapa_funil !== 'agendamento'
+    c.leads &&
+    c.leads.etapa_funil !== 'cliente' &&
+    c.leads.etapa_funil !== 'perdido' &&
+    c.leads.etapa_funil !== 'agendamento' &&
+    c.leads.etapa_funil !== 'documentos'
   );
 }
 
@@ -288,7 +293,7 @@ async function getConversaMensagens(conversaId) {
 
 async function getMetricas() {
   const { data: leads } = await supabase.from('leads').select('etapa_funil, criado_em').eq('escritorio', ESC);
-  const etapas = { novo: 0, contato: 0, proposta: 0, agendamento: 0, convertido: 0, perdido: 0 };
+  const etapas = { novo: 0, contato: 0, agendamento: 0, documentos: 0, cliente: 0, perdido: 0 };
   (leads || []).forEach(l => { if (etapas[l.etapa_funil] !== undefined) etapas[l.etapa_funil]++; });
 
   const { data: conversas } = await supabase.from('conversas').select('id, criado_em').eq('status', 'ativa').eq('escritorio', ESC);
@@ -307,7 +312,7 @@ async function getMetricas() {
     followups_72h: eventos.filter(e => e.evento === 'followup_72h').length,
     leads_quentes: eventos.filter(e => e.evento === 'lead_quente').length,
     taxa_conversao: (leads || []).length > 0
-      ? ((etapas.convertido / (leads || []).length) * 100).toFixed(1) + '%'
+      ? ((etapas.cliente / (leads || []).length) * 100).toFixed(1) + '%'
       : '0%'
   };
 }
@@ -522,7 +527,7 @@ async function getRelatorioSemanal() {
     .eq('escritorio', ESC)
         .gte('criado_em', semanaAtrasISO);
 
-  const convertidos = (leadsNovos || []).filter(l => l.etapa_funil === 'convertido');
+  const convertidos = (leadsNovos || []).filter(l => l.etapa_funil === 'cliente');
 
   const { data: cobrancas } = await supabase
     .from('financeiro')
@@ -547,7 +552,7 @@ async function getRelatorioSemanal() {
     .from('leads')
     .select('id')
     .eq('escritorio', ESC)
-        .not('etapa_funil', 'in', '("convertido","perdido","agendamento")');
+        .not('etapa_funil', 'in', '("cliente","perdido","agendamento","documentos")');
 
   const { data: recebidos } = await supabase
     .from('financeiro')
@@ -688,7 +693,7 @@ async function getAnalytics(dias = 30) {
       .gte('criado_em', desde);
 
     const total = (leads || []).length;
-    const etapas = { novo: 0, contato: 0, proposta: 0, agendamento: 0, convertido: 0, perdido: 0 };
+    const etapas = { novo: 0, contato: 0, agendamento: 0, documentos: 0, cliente: 0, perdido: 0 };
     const porVariante = { A: { total: 0, convertido: 0 }, B: { total: 0, convertido: 0 } };
 
     for (const l of (leads || [])) {
@@ -696,7 +701,7 @@ async function getAnalytics(dias = 30) {
       const v = l.ab_variante || 'A';
       if (porVariante[v]) {
         porVariante[v].total++;
-        if (l.etapa_funil === 'convertido' || l.etapa_funil === 'agendamento') {
+        if (l.etapa_funil === 'cliente' || l.etapa_funil === 'documentos' || l.etapa_funil === 'agendamento') {
           porVariante[v].convertido++;
         }
       }
@@ -728,9 +733,10 @@ async function getAnalytics(dias = 30) {
     // Funil de conversão
     const funil = {
       leads_novos: total,
-      fizeram_triagem: etapas.contato + etapas.proposta + etapas.agendamento + etapas.convertido,
-      receberam_oferta: etapas.proposta + etapas.agendamento + etapas.convertido,
-      agendaram: etapas.agendamento + etapas.convertido,
+      fizeram_triagem: etapas.contato + etapas.agendamento + etapas.documentos + etapas.cliente,
+      receberam_oferta: etapas.agendamento + etapas.documentos + etapas.cliente,
+      agendaram: etapas.agendamento + etapas.documentos + etapas.cliente,
+      clientes: etapas.cliente,
       perdidos: etapas.perdido
     };
 

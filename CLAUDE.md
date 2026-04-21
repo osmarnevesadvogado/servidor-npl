@@ -86,8 +86,8 @@ Mesmo objeto acima + conversas vinculadas:
     "agendamento": "37.5%",
     "perda": "20%"
   },
-  "leads_por_etapa": { "novo": 20, "contato": 30, "proposta": 20, "agendamento": 15, "convertido": 10, "perdido": 10 },
-  "score_medio_por_etapa": { "novo": 5, "contato": 25, "proposta": 55, "convertido": 75 },
+  "leads_por_etapa": { "novo": 20, "contato": 30, "agendamento": 15, "documentos": 8, "cliente": 10, "perdido": 10 },
+  "score_medio_por_etapa": { "novo": 5, "contato": 25, "agendamento": 55, "cliente": 75 },
   "ab_testing": {
     "A": { "total": 50, "convertido": 8, "taxa": "16%", "nome_variante": "consulta_gratuita" },
     "B": { "total": 50, "convertido": 12, "taxa": "24%", "nome_variante": "sem_risco" }
@@ -102,7 +102,7 @@ Mesmo objeto acima + conversas vinculadas:
 
 **leads** — dados dos leads
 - `id`, `nome`, `telefone`, `email`, `escritorio` ('npl'), `instancia`
-- `etapa_funil`: novo → contato → proposta → agendamento → convertido / perdido
+- `etapa_funil`: novo → contato → agendamento → documentos → cliente / perdido
 - `tese_interesse`, `notas`, `origem`
 - `score` (0-100): scoring automático do lead
 - `score_detalhes`: critérios (ex: "engajado,resposta_rapida,quer_agendar")
@@ -162,8 +162,9 @@ Calculado a cada mensagem do lead. Critérios:
 - Reserva: 20 minutos por slot
 - Escassez: comunica "últimos horários" quando ≤3 slots
 - Janela: busca 10 dias úteis
-- **Funil**: ao criar consulta, lead é movido automaticamente para etapa `agendamento`
-- Leads em `agendamento` não recebem follow-ups nem entram em recuperação de vácuo
+- **Funil**: ao criar consulta, lead é movido automaticamente para etapa `agendamento` (não regride se já estiver em `documentos` ou `cliente`)
+- Leads em `agendamento`, `documentos` ou `cliente` não recebem follow-ups nem entram em recuperação de vácuo
+- Etapa `documentos` = pós-consulta, cliente coletando documentos; `cliente` = fechou contrato
 
 ## Equipe do escritório NPLADVS
 - Sócios: Dr. Osmar Neves, Dr. Bruno Pinheiro, Dr. Rodrigo Lins
@@ -192,7 +193,7 @@ Para feriados adicionais, enforcados e férias da equipe, use a tabela `dias_nao
 - 4h: texto
 - 24h: texto
 - 72h: texto + marca lead como perdido
-- Não se aplica a leads em etapa `agendamento`, `convertido` ou `perdido`
+- Não se aplica a leads em etapa `agendamento`, `documentos`, `cliente` ou `perdido`
 - Validação: descarta mensagens inválidas antes de enviar
 - Contexto: referencia o caso específico do lead
 
@@ -222,7 +223,7 @@ O servidor suporta 2 números WhatsApp simultâneos:
 **Número 02 — Prospecção** (ZAPI_INSTANCE_ID_PROSPECCAO, ZAPI_TOKEN_PROSPECCAO, ZAPI_CLIENT_TOKEN_PROSPECCAO)
 - Laura ativa 24/7
 - Foco em prospecção de leads
-- Leads convertidos permanecem neste número
+- Leads que viraram cliente permanecem neste número
 
 Detecção automática: o webhook identifica a instância pelo `instanceId` do payload Z-API.
 

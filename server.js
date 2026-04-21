@@ -443,10 +443,12 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
             }
 
             // Mover lead no funil para "agendamento" (agendou consulta)
+            // Não regride leads que já estão em documentos ou cliente
             if (lead) {
               try {
                 const etapaAtual = lead.etapa_funil || 'novo';
-                if (etapaAtual !== 'convertido' && etapaAtual !== 'agendamento') {
+                const etapasPosAgendamento = ['agendamento', 'documentos', 'cliente'];
+                if (!etapasPosAgendamento.includes(etapaAtual)) {
                   await db.updateLead(lead.id, { etapa_funil: 'agendamento' });
                   console.log(`[FUNIL-NPL] ${nome} movido para 'agendamento' (agendou consulta)`);
                 }
@@ -1469,12 +1471,19 @@ app.get('/api/leads/:id', async (req, res) => {
   }
 });
 
+const ETAPAS_FUNIL_VALIDAS = ['novo', 'contato', 'agendamento', 'documentos', 'cliente', 'perdido'];
+
 app.put('/api/leads/:id', requireApiKey, async (req, res) => {
   try {
     const allowed = ['nome', 'email', 'etapa_funil', 'tese_interesse', 'notas', 'origem'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    if (updates.etapa_funil && !ETAPAS_FUNIL_VALIDAS.includes(updates.etapa_funil)) {
+      return res.status(400).json({
+        error: `etapa_funil inválida. Use uma de: ${ETAPAS_FUNIL_VALIDAS.join(', ')}`
+      });
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
@@ -1644,7 +1653,7 @@ async function enviarRelatorioSemanal() {
 ${hoje}
 
 Novos leads: ${r.leadsNovos}
-Convertidos: ${r.convertidos}
+Clientes: ${r.convertidos}
 Agendamentos: ${r.agendamentos}
 Leads ativos no funil: ${r.leadsAtivos}
 
