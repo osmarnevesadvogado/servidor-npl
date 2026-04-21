@@ -442,13 +442,13 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
               console.log('[TAREFA-NPL] Erro ao criar tarefa:', e.message);
             }
 
-            // Mover lead no funil para "proposta" (agendou consulta)
+            // Mover lead no funil para "agendamento" (agendou consulta)
             if (lead) {
               try {
                 const etapaAtual = lead.etapa_funil || 'novo';
-                if (etapaAtual !== 'convertido' && etapaAtual !== 'proposta') {
-                  await db.updateLead(lead.id, { etapa_funil: 'proposta' });
-                  console.log(`[FUNIL-NPL] ${nome} movido para 'proposta' (agendou consulta)`);
+                if (etapaAtual !== 'convertido' && etapaAtual !== 'agendamento') {
+                  await db.updateLead(lead.id, { etapa_funil: 'agendamento' });
+                  console.log(`[FUNIL-NPL] ${nome} movido para 'agendamento' (agendou consulta)`);
                 }
               } catch (e) {
                 console.log('[FUNIL-NPL] Erro ao mover lead:', e.message);

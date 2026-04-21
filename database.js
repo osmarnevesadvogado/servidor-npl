@@ -234,7 +234,7 @@ async function getEligibleConversas() {
   if (!data) return [];
 
   return data.filter(c =>
-    c.leads && c.leads.etapa_funil !== 'convertido' && c.leads.etapa_funil !== 'perdido'
+    c.leads && c.leads.etapa_funil !== 'convertido' && c.leads.etapa_funil !== 'perdido' && c.leads.etapa_funil !== 'agendamento'
   );
 }
 
@@ -288,7 +288,7 @@ async function getConversaMensagens(conversaId) {
 
 async function getMetricas() {
   const { data: leads } = await supabase.from('leads').select('etapa_funil, criado_em').eq('escritorio', ESC);
-  const etapas = { novo: 0, contato: 0, proposta: 0, convertido: 0, perdido: 0 };
+  const etapas = { novo: 0, contato: 0, proposta: 0, agendamento: 0, convertido: 0, perdido: 0 };
   (leads || []).forEach(l => { if (etapas[l.etapa_funil] !== undefined) etapas[l.etapa_funil]++; });
 
   const { data: conversas } = await supabase.from('conversas').select('id, criado_em').eq('status', 'ativa').eq('escritorio', ESC);
@@ -547,7 +547,7 @@ async function getRelatorioSemanal() {
     .from('leads')
     .select('id')
     .eq('escritorio', ESC)
-        .not('etapa_funil', 'in', '("convertido","perdido")');
+        .not('etapa_funil', 'in', '("convertido","perdido","agendamento")');
 
   const { data: recebidos } = await supabase
     .from('financeiro')
@@ -688,7 +688,7 @@ async function getAnalytics(dias = 30) {
       .gte('criado_em', desde);
 
     const total = (leads || []).length;
-    const etapas = { novo: 0, contato: 0, proposta: 0, convertido: 0, perdido: 0 };
+    const etapas = { novo: 0, contato: 0, proposta: 0, agendamento: 0, convertido: 0, perdido: 0 };
     const porVariante = { A: { total: 0, convertido: 0 }, B: { total: 0, convertido: 0 } };
 
     for (const l of (leads || [])) {
@@ -696,7 +696,7 @@ async function getAnalytics(dias = 30) {
       const v = l.ab_variante || 'A';
       if (porVariante[v]) {
         porVariante[v].total++;
-        if (l.etapa_funil === 'convertido' || l.etapa_funil === 'proposta') {
+        if (l.etapa_funil === 'convertido' || l.etapa_funil === 'agendamento') {
           porVariante[v].convertido++;
         }
       }
@@ -728,9 +728,9 @@ async function getAnalytics(dias = 30) {
     // Funil de conversão
     const funil = {
       leads_novos: total,
-      fizeram_triagem: etapas.contato + etapas.proposta + etapas.convertido,
-      receberam_oferta: etapas.proposta + etapas.convertido,
-      agendaram: eventosCont['consulta_agendada'] || 0,
+      fizeram_triagem: etapas.contato + etapas.proposta + etapas.agendamento + etapas.convertido,
+      receberam_oferta: etapas.proposta + etapas.agendamento + etapas.convertido,
+      agendaram: etapas.agendamento + etapas.convertido,
       perdidos: etapas.perdido
     };
 
