@@ -2117,10 +2117,91 @@ app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (r
       return res.status(400).json({ error: 'Nenhum campo válido para atualizar' });
     }
     await db.updateLead(req.params.id, updates);
+
+    // Se o nome mudou, sincronizar titulo de todas as conversas vinculadas
+    if (updates.nome) {
+      try {
+        const { data: conversasDoLead } = await db.supabase
+          .from('conversas')
+          .select('id')
+          .eq('lead_id', req.params.id);
+        if (conversasDoLead && conversasDoLead.length > 0) {
+          for (const conv of conversasDoLead) {
+            await db.updateConversa(conv.id, { titulo: updates.nome });
+          }
+          console.log(`[LEADS] Nome atualizado para "${updates.nome}" — ${conversasDoLead.length} conversa(s) sincronizada(s)`);
+        }
+      } catch (e) {
+        console.log('[LEADS] Erro ao sincronizar titulo:', e.message);
+      }
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error('[LEADS] Erro ao atualizar:', e.message);
     res.status(500).json({ error: 'Erro ao atualizar lead' });
+  }
+});
+
+// ===== AGENDAMENTO MANUAL (botão do CRM) =====
+app.post('/api/agendamentos/manual', requireApiKey, async (req, res) => {
+  try {
+    if (!calendar) return res.status(503).json({ error: 'Calendar não disponível' });
+
+    const { phone, nome, data, hora, formato, usuario_nome } = req.body;
+    if (!phone || !data || hora === undefined || hora === null) {
+      return res.status(400).json({ error: 'Campos obrigatórios: phone, data (YYYY-MM-DD), hora (0-23)' });
+    }
+
+    const horaNum = parseInt(hora);
+    const [ano, mes, dia] = data.split('-').map(Number);
+    if (!ano || !mes || !dia || isNaN(horaNum)) {
+      return res.status(400).json({ error: 'Formato inválido. data: YYYY-MM-DD, hora: número 0-23' });
+    }
+
+    const { criarDataBelem } = require('./calendar');
+    const inicio = criarDataBelem(ano, mes - 1, dia, horaNum, 0);
+
+    if (inicio <= new Date()) {
+      return res.status(400).json({ error: 'Horário no passado' });
+    }
+
+    const nomeConsulta = nome || phone;
+    const formatoConsulta = formato || 'online';
+
+    const resultado = await calendar.criarConsulta(nomeConsulta, phone, null, inicio, formatoConsulta, 'escritorio');
+    if (!resultado) {
+      return res.status(409).json({ error: 'Conflito — já existe consulta nesse horário' });
+    }
+
+    // Rastrear evento e mover lead no funil
+    try {
+      const lead = await db.getOrCreateLead(phone, nomeConsulta);
+      const conversa = await db.getOrCreateConversa(phone);
+      if (conversa && lead) {
+        await db.trackEvent(conversa.id, lead.id, 'consulta_agendada', `${resultado.inicio} - ${resultado.colaboradora} (manual por ${usuario_nome || 'CRM'})`);
+        const etapaAtual = lead.etapa_funil || 'novo';
+        if (!['agendamento', 'documentos', 'cliente'].includes(etapaAtual)) {
+          await db.updateLead(lead.id, { etapa_funil: 'agendamento' });
+        }
+      }
+    } catch (e) {
+      console.log('[AGENDAMENTO-MANUAL] Erro ao rastrear:', e.message);
+    }
+
+    console.log(`[AGENDAMENTO-MANUAL] ${nomeConsulta} agendado por ${usuario_nome || 'CRM'}: ${resultado.inicio} com ${resultado.colaboradora}`);
+    res.json({
+      ok: true,
+      agendamento: {
+        id: resultado.id,
+        inicio: resultado.inicio,
+        colaboradora: resultado.colaboradora,
+        formato: formatoConsulta
+      }
+    });
+  } catch (e) {
+    console.error('[AGENDAMENTO-MANUAL] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao criar agendamento' });
   }
 });
 

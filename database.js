@@ -153,16 +153,21 @@ async function extractAndUpdateLead(leadId, text) {
   const emailMatch = text.match(/[\w.-]+@[\w.-]+\.\w{2,}/);
   if (emailMatch) updates.email = emailMatch[0];
 
-  // Nome
-  const nomePatterns = [
-    /(?:me chamo|meu nome é|sou o |sou a |pode me chamar de )\s*([A-ZÀ-Ú][a-zà-ú]+(?: [A-ZÀ-Ú][a-zà-ú]+){0,3})/i,
-    /(?:^|\n)([A-ZÀ-Ú][a-zà-ú]+ [A-ZÀ-Ú][a-zà-ú]+)(?:\s*$)/m
-  ];
-  for (const pattern of nomePatterns) {
-    const match = text.match(pattern);
-    if (match && match[1].length > 3 && match[1].length < 50) {
-      updates.nome = match[1].trim();
-      break;
+  // Nome — só extrai se o lead ainda não tem nome real (evita sobrescrever edição manual do CRM)
+  const { data: leadAtualNome } = await supabase.from('leads').select('nome').eq('id', leadId).maybeSingle();
+  const nomeAtual = leadAtualNome?.nome || '';
+  const nomeEhFallback = !nomeAtual || nomeAtual.startsWith('WhatsApp') || /^\+?\(?\d/.test(nomeAtual) || /^\(\d{2}\)\s?\d/.test(nomeAtual);
+  if (nomeEhFallback) {
+    const nomePatterns = [
+      /(?:me chamo|meu nome é|sou o |sou a |pode me chamar de )\s*([A-ZÀ-Ú][a-zà-ú]+(?: [A-ZÀ-Ú][a-zà-ú]+){0,3})/i,
+      /(?:^|\n)([A-ZÀ-Ú][a-zà-ú]+ [A-ZÀ-Ú][a-zà-ú]+)(?:\s*$)/m
+    ];
+    for (const pattern of nomePatterns) {
+      const match = text.match(pattern);
+      if (match && match[1].length > 3 && match[1].length < 50) {
+        updates.nome = match[1].trim();
+        break;
+      }
     }
   }
 
