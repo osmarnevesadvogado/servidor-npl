@@ -35,12 +35,19 @@ app.use(express.json({ limit: '1mb' }));
 
 // Middleware de autenticação para endpoints da API
 function requireApiKey(req, res, next) {
-  if (!config.API_KEY) return next(); // se não configurada, permite (dev local)
+  if (!config.API_KEY) return next();
   const key = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
-  if (key !== config.API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (key === config.API_KEY) return next();
+
+  // Permitir requisições do CRM (origem confiável via ALLOWED_ORIGINS)
+  // O CORS do navegador já impede que sites externos façam requests
+  if (config.ALLOWED_ORIGINS) {
+    const origin = req.headers.origin || req.headers.referer || '';
+    const allowed = config.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+    if (allowed.some(a => origin.startsWith(a))) return next();
   }
-  next();
+
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 // ===== AUDITORIA DE ACESSO A DADOS SENSÍVEIS =====
