@@ -1244,13 +1244,20 @@ app.post('/webhook/zapi', async (req, res) => {
     // Detectar qual instância (escritório ou prospecção)
     const instancia = whatsapp.detectarInstancia(body);
 
-    // DEBUG temporário: logar todo webhook pra diagnosticar fromMe
-    console.log(`[WEBHOOK-DEBUG] type=${body.type} fromMe=${isFromMe} phone=${body.phone || body.from || body.to || '-'} instancia=${instancia} hasText=${!!(body.text?.message || body.body)}`);
+    // Quando fromMe=true via Multi-Device, o "phone" pode vir como @lid do dispositivo vinculado.
+    // Nesse caso precisamos buscar o telefone do destinatário em outros campos (chatId, to, chat, etc).
+    if (isFromMe) {
+      // Logar payload completo 1x pra entender o formato
+      console.log(`[FROMME-DEBUG] body=${JSON.stringify(body).slice(0, 600)}`);
+    }
 
-    // Ignorar grupos, listas de transmissão e números não-brasileiros
+    // Ignorar grupos e listas de transmissão (mas permitir @lid em fromMe — é id de device vinculado)
     const rawPhone = body.phone || body.from || body.to || '';
-    if (rawPhone.includes('@lid') || rawPhone.includes('@g.us') || rawPhone.includes('@broadcast')) {
+    if (rawPhone.includes('@g.us') || rawPhone.includes('@broadcast')) {
       return res.json({ status: 'group_ignored' });
+    }
+    if (rawPhone.includes('@lid') && !isFromMe) {
+      return res.json({ status: 'lid_ignored' });
     }
     // Ignorar números internacionais (não começam com 55)
     const phoneDigits = rawPhone.replace(/\D/g, '').replace(/@.*/, '');
@@ -1274,10 +1281,32 @@ app.post('/webhook/zapi', async (req, res) => {
     }
 
     if (isFromMe) {
-      const phone = body.phone || body.to?.replace('@c.us', '') || '';
+      // Extrair telefone do destinatário (vários formatos possíveis quando vem de device vinculado)
+      const candidatos = [
+        body.to,
+        body.chatId,
+        body.chat,
+        body.phone,
+        body.from,
+        body.recipient
+      ];
+      let phone = '';
+      for (const c of candidatos) {
+        if (!c) continue;
+        const limpo = String(c).replace('@c.us', '').replace('@s.whatsapp.net', '');
+        // Só aceita se for número puro (ou com @c.us), não @lid nem @g.us
+        if (!limpo.includes('@') && /^\d{10,15}$/.test(limpo)) {
+          phone = limpo;
+          break;
+        }
+      }
+      if (!phone) {
+        console.log(`[MANUAL-NPL] fromMe sem phone resolvivel — body keys: ${Object.keys(body).join(',')}`);
+        return res.json({ status: 'fromme_no_phone' });
+      }
 
       // Fast path: servidor/Laura acabou de enviar (60s) — ignorar echo
-      if (phone && whatsapp.wasBotRecentSend(phone)) {
+      if (whatsapp.wasBotRecentSend(phone)) {
         return res.json({ status: 'bot_sent' });
       }
 
