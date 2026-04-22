@@ -1272,23 +1272,79 @@ app.post('/webhook/zapi', async (req, res) => {
 
     if (isFromMe) {
       const phone = body.phone || body.to?.replace('@c.us', '') || '';
+
+      // Fast path: servidor/Laura acabou de enviar (60s) — ignorar echo
       if (phone && whatsapp.wasBotRecentSend(phone)) {
         return res.json({ status: 'bot_sent' });
       }
+
+      // Dedup por messageId (evita processar mesmo webhook 2x)
+      if (messageId && processedMessages.has(messageId)) {
+        return res.json({ status: 'duplicate' });
+      }
+      if (messageId) processedMessages.add(messageId);
+
       if (phone) {
         pauseAI(phone, 30);
         console.log(`[MANUAL-NPL] Atendente respondeu para ${phone} - IA pausada 30min`);
 
-        // Criar conversa/lead se for primeiro contato (outbound)
         try {
-          const text = body.text?.message || body.body || '';
           const conversa = await db.getOrCreateConversa(phone);
           await db.getOrCreateLead(phone);
+
+          // Extrair texto e mídia do payload
+          let text = body.text?.message || body.body || '';
+          let mediaUrl = null;
+          let mediaType = null;
+
+          if (body.image || body.imageMessage) {
+            const img = body.image || body.imageMessage;
+            mediaUrl = img.imageUrl || img.url || img.mediaUrl;
+            mediaType = 'image';
+            text = img.caption || text || '[Imagem]';
+          }
+          if (body.audio || body.audioMessage) {
+            const aud = body.audio || body.audioMessage;
+            mediaUrl = aud.audioUrl || aud.url || aud.mediaUrl;
+            mediaType = 'audio';
+            text = text || '🎤 Áudio';
+          }
+          if (body.document || body.documentMessage) {
+            const doc = body.document || body.documentMessage;
+            mediaUrl = doc.documentUrl || doc.url || doc.mediaUrl;
+            mediaType = 'document';
+            text = doc.caption || doc.fileName || text || '[Documento]';
+          }
+          if (body.video || body.videoMessage) {
+            const vid = body.video || body.videoMessage;
+            mediaUrl = vid.videoUrl || vid.url || vid.mediaUrl;
+            mediaType = 'video';
+            text = vid.caption || text || '[Vídeo]';
+          }
+
           if (text && conversa) {
-            await db.saveMessage(conversa.id, 'assistant', text, { manual: true });
+            // Dedup conteúdo: se mensagem idêntica foi salva nos últimos 2min, é echo do bot
+            const { data: recente } = await db.supabase
+              .from('mensagens')
+              .select('id')
+              .eq('conversa_id', conversa.id)
+              .eq('content', text)
+              .gte('criado_em', new Date(Date.now() - 120000).toISOString())
+              .limit(1);
+
+            if (recente && recente.length > 0) {
+              console.log(`[MANUAL-NPL] Dedup echo: "${text.slice(0, 50)}" já salvo`);
+              return res.json({ status: 'dedup_echo' });
+            }
+
+            const extras = { manual: true };
+            if (mediaUrl) extras.media_url = mediaUrl;
+            if (mediaType) extras.media_type = mediaType;
+            await db.saveMessage(conversa.id, 'assistant', text, extras);
+            console.log(`[MANUAL-NPL] ${phone}: "${text.slice(0, 60)}" (${mediaType || 'texto'})`);
           }
         } catch (e) {
-          console.log('[MANUAL-NPL] Erro ao criar conversa outbound:', e.message);
+          console.log('[MANUAL-NPL] Erro ao salvar msg externa:', e.message);
         }
       }
       return res.json({ status: 'manual_detected' });
