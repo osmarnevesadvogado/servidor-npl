@@ -782,9 +782,9 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
       // Segunda mensagem automática: autoridade e confiança
       const msgCredibilidade =
-        `O escritorio Neves Pinheiro Lins Sociedade de Advogados ja ajudou centenas de trabalhadores de todo o pais, principalmente trabalhadores paraenses, a conquistarem seus direitos.\n\n` +
-        `Somos um escritorio registrado na OAB, com CNPJ ativo e equipe de advogados especializados em direito do trabalho.\n\n` +
-        `Conheca nossa equipe e estrutura: https://npladvogados.com.br`;
+        `O escritorio Neves Pinheiro Lins ja ajudou centenas de trabalhadores de todo o pais, principalmente paraenses, a conquistar seus direitos. ` +
+        `Somos registrados na OAB com equipe especializada em direito do trabalho.\n\n` +
+        `Conheca nosso escritorio e equipe: https://npladvogados.com.br`;
       setTimeout(async () => {
         try {
           await whatsapp.sendText(phone, msgCredibilidade, instancia);
