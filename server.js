@@ -37,17 +37,10 @@ app.use(express.json({ limit: '1mb' }));
 function requireApiKey(req, res, next) {
   if (!config.API_KEY) return next();
   const key = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
-  if (key === config.API_KEY) return next();
-
-  // Permitir requisições do CRM (origem confiável via ALLOWED_ORIGINS)
-  // O CORS do navegador já impede que sites externos façam requests
-  if (config.ALLOWED_ORIGINS) {
-    const origin = req.headers.origin || req.headers.referer || '';
-    const allowed = config.ALLOWED_ORIGINS.split(',').map(o => o.trim());
-    if (allowed.some(a => origin.startsWith(a))) return next();
+  if (key !== config.API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-
-  return res.status(401).json({ error: 'Unauthorized' });
+  next();
 }
 
 // ===== AUDITORIA DE ACESSO A DADOS SENSÍVEIS =====
@@ -186,15 +179,22 @@ async function resolverLidParaPhone(chatLid, chatName) {
   // 1. Cache
   const cacheado = lidPhoneMap.get(chatLid);
   if (cacheado) return cacheado;
-  // 2. Match por chatName no banco
+  // 2. Match por chatName no banco — sanitiza agressivamente antes de usar no filtro
   if (chatName && chatName.trim().length > 2) {
     try {
-      const nomeLimpo = chatName.replace(/[\u{1F300}-\u{1FAF8}\u{2600}-\u{27BF}]/gu, '').trim();
+      // Remove emojis e mantém apenas letras, números, espaços, hífen e apóstrofo
+      const nomeLimpo = chatName
+        .replace(/[\u{1F300}-\u{1FAF8}\u{2600}-\u{27BF}]/gu, '')
+        .replace(/[^\p{L}\p{M}0-9 .'-]/gu, '')
+        .trim()
+        .slice(0, 40);
+      // Só prossegue se sobrou algo razoável (evita filtros vazios/injection)
+      if (!nomeLimpo || nomeLimpo.length < 3) return null;
       const { data } = await db.supabase
         .from('conversas')
         .select('telefone, titulo')
         .eq('escritorio', config.ESCRITORIO)
-        .or(`titulo.ilike.%${nomeLimpo}%,telefone.ilike.%${nomeLimpo}%`)
+        .ilike('titulo', `%${nomeLimpo}%`)
         .limit(5);
       if (data && data.length === 1 && data[0].telefone) {
         lidPhoneMap.set(chatLid, data[0].telefone);
@@ -1300,13 +1300,17 @@ app.post('/webhook/zapi', async (req, res) => {
     // Detectar qual instância (escritório ou prospecção)
     const instancia = whatsapp.detectarInstancia(body);
 
-    // Popular cache @lid -> telefone sempre que tivermos ambos
-    const rawPhoneParaMap = body.phone || body.from || body.to || '';
-    const limpoParaMap = String(rawPhoneParaMap).replace('@c.us', '').replace('@s.whatsapp.net', '');
-    if (chatLid && limpoParaMap && !limpoParaMap.includes('@') && /^\d{10,15}$/.test(limpoParaMap)) {
-      if (lidPhoneMap.get(chatLid) !== limpoParaMap) {
-        lidPhoneMap.set(chatLid, limpoParaMap);
-        console.log(`[LID-MAP] ${chatLid} -> ${limpoParaMap} (${chatName})`);
+    // Popular cache @lid -> telefone SOMENTE em mensagens incoming (fromMe=false).
+    // Outgoing (fromMe=true) pode vir de webhook forjado ou device vinculado com
+    // phone=@lid que não deve ser cacheado. Só confiamos em incoming de contato real.
+    if (!isFromMe && isMessage) {
+      const rawPhoneParaMap = body.phone || body.from || '';
+      const limpoParaMap = String(rawPhoneParaMap).replace('@c.us', '').replace('@s.whatsapp.net', '');
+      if (chatLid && limpoParaMap && !limpoParaMap.includes('@') && /^\d{10,15}$/.test(limpoParaMap)) {
+        if (lidPhoneMap.get(chatLid) !== limpoParaMap) {
+          lidPhoneMap.set(chatLid, limpoParaMap);
+          console.log(`[LID-MAP] ${chatLid} -> ${limpoParaMap} (${chatName})`);
+        }
       }
     }
 
