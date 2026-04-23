@@ -1,10 +1,10 @@
 # Servidor NPL - Laura (Assistente Virtual)
 
 ## Visão Geral
-Servidor Node.js/Express que opera a Laura, assistente virtual do escritório NPLADVS (direito trabalhista, Belém/PA). Atende leads via WhatsApp (Z-API), faz triagem, agenda consultas (Google Calendar) e gerencia o funil de vendas.
+Servidor Node.js/Express que opera a Laura, assistente virtual do escritório Neves Pinheiro Lins Sociedade de Advogados (direito trabalhista, Belém/PA). Atende leads via WhatsApp (Z-API + Datacrazy Cloud API), faz triagem, agenda consultas (Google Calendar) e gerencia o funil de vendas.
 
 ## Integração com CRM
-O CRM frontend (hospedado no GitHub Pages, repositório separado) chama diretamente os endpoints deste servidor. **Este é o único backend** — não existe outro servidor para o CRM. Todas as chamadas do CRM vão para `https://servidor-npl.onrender.com`.
+O CRM frontend (hospedado no GitHub Pages, repositório `npladvs-crm`) chama diretamente os endpoints deste servidor. **Este é o único backend** — não existe outro servidor para o CRM. Todas as chamadas do CRM vão para `https://servidor-npl.onrender.com`.
 
 ### Endpoints da API (todos POST requerem header `x-api-key`)
 
@@ -15,9 +15,10 @@ O CRM frontend (hospedado no GitHub Pages, repositório separado) chama diretame
 | GET | `/api/conversas/:id/mensagens` | Mensagens de uma conversa |
 | GET | `/api/leads` | Lista leads com dados completos. Filtros: `?etapa=contato&limit=100` |
 | GET | `/api/leads/:id` | Detalhes de um lead + conversas vinculadas |
-| PUT | `/api/leads/:id` | Atualizar lead `{nome, email, etapa_funil, tese_interesse, notas, origem}` |
+| PUT | `/api/leads/:id` | Atualizar lead — sincroniza titulo de todas as conversas vinculadas |
 | GET | `/api/metricas` | Leads por etapa, conversas ativas |
-| GET | `/api/agendamentos?dias=30` | Lista consultas do Google Calendar (nome, telefone, data, colaboradora) |
+| GET | `/api/agendamentos?dias=30` | Lista consultas do Google Calendar |
+| POST | `/api/agendamentos/manual` | Agendar consulta manualmente `{phone, nome, data, hora, formato, usuario_nome}` |
 | GET | `/api/analytics?dias=30` | Funil de conversão, A/B testing, scoring |
 | GET | `/api/relatorio-semanal` | Dados do relatório semanal |
 | GET | `/api/documentos/auditoria/:phone` | Mídias recebidas de um telefone |
@@ -27,82 +28,25 @@ O CRM frontend (hospedado no GitHub Pages, repositório separado) chama diretame
 | POST | `/api/pausar` | Pausar IA `{phone, minutes}` |
 | POST | `/api/retomar` | Retomar IA `{phone}` |
 | POST | `/api/chat` | Proxy Claude para CRM `{system, messages}` |
-| POST | `/api/documentos/analisar` | Analisar doc via Claude Vision `{mediaUrl, mediaType, clienteNome, clienteCpf}` → `{ok, tipo, nome_sugerido, dados_extraidos}` |
+| POST | `/api/documentos/analisar` | Analisar doc via Claude Vision |
 | POST | `/api/documentos/organizar` | Organizar docs `{phone, nome, tese}` |
 | POST | `/api/documentos/cobrar` | Cobrar docs `{phone, nome, auditoria}` |
 | POST | `/api/relatorio-semanal` | Disparar relatório |
 | GET | `/api/pausar/status?phone=X` | Verificar se IA está pausada para um telefone |
 | GET | `/api/dias-nao-uteis` | Listar feriados/enforcados futuros |
-| POST | `/api/dias-nao-uteis` | Adicionar dia não útil `{data: 'YYYY-MM-DD', tipo: 'enforcado\|feriado\|ferias', descricao}` |
+| POST | `/api/dias-nao-uteis` | Adicionar dia não útil `{data, tipo, descricao}` |
 | DELETE | `/api/dias-nao-uteis/:id` | Remover dia não útil |
-| POST | `/api/recuperar-vacuo` | Dispara Laura para leads sem resposta `{desde, instancia}` |
-| POST | `/api/verbas/calcular` | Estimativa de verbas rescisórias `{salario, mesesTrabalho, motivo, carteiraAssinada}` → CLT preview |
-| POST | `/api/feedback` | Registra 👍/👎 do CRM `{mensagemId, conversaId, leadId, rating, comentario, usuario_nome}` |
+| POST | `/api/recuperar-vacuo` | Dispara Laura para leads sem resposta |
+| POST | `/api/verbas/calcular` | Estimativa de verbas rescisórias CLT |
+| POST | `/api/feedback` | Registra 👍/👎 do CRM |
 | GET | `/api/feedback?dias=30` | Lista feedbacks recentes |
-| GET | `/api/analise/conversoes?dias=30` | Compara leads `cliente` vs `perdido` (score, tempo, msgs, origens, A/B) |
+| GET | `/api/analise/conversoes?dias=30` | Compara leads cliente vs perdido |
 | GET | `/api/relatorio/advogadas?dias=30` | Consultas por colaboradora + taxa de fechamento |
-| GET | `/api/analise/horarios?dias=30` | Heatmap mensagens/hora × dia da semana (Belém) |
-| GET | `/api/analise/origens?dias=30` | Leads por origem (Instagram/Google/etc) + taxa de conversão |
+| GET | `/api/analise/horarios?dias=30` | Heatmap mensagens/hora × dia da semana |
+| GET | `/api/analise/origens?dias=30` | Leads por origem + taxa de conversão |
 | GET | `/api/auditoria?dias=7&acao=read&recurso=lead&usuario=X` | Log de acesso a dados sensíveis |
 | POST | `/webhook/zapi` | Webhook da Laura (processa com IA) |
-| POST | `/webhook/zapi-escritorio` | Webhook do escritório (só salva, sem IA). Conversas com `origem_numero = 'escritorio'` |
-
-### Resposta do GET /api/leads
-```json
-[{
-  "id": "uuid",
-  "nome": "João Silva",
-  "telefone": "5591999999999",
-  "email": "joao@email.com",
-  "etapa_funil": "contato",
-  "tese_interesse": "rescisão indireta",
-  "notas": "...",
-  "origem": "whatsapp",
-  "score": 45,
-  "score_detalhes": "engajado,resposta_rapida",
-  "ab_variante": "A",
-  "instancia": "escritorio",
-  "criado_em": "2026-04-20T...",
-  "atualizado_em": "2026-04-21T...",
-  "data_primeiro_contato": "2026-04-20T..."
-}]
-```
-
-### Resposta do GET /api/leads/:id
-Mesmo objeto acima + conversas vinculadas:
-```json
-{
-  "...campos acima",
-  "conversas": [{ "id": "uuid", "status": "ativa", "criado_em": "..." }]
-}
-```
-
-### Resposta do /api/analytics
-```json
-{
-  "periodo": "30 dias",
-  "funil": {
-    "leads_novos": 100,
-    "fizeram_triagem": 60,
-    "receberam_oferta": 40,
-    "agendaram": 15,
-    "perdidos": 20
-  },
-  "taxas": {
-    "triagem": "60%",
-    "oferta": "66.7%",
-    "agendamento": "37.5%",
-    "perda": "20%"
-  },
-  "leads_por_etapa": { "novo": 20, "contato": 30, "agendamento": 15, "documentos": 8, "cliente": 10, "perdido": 10 },
-  "score_medio_por_etapa": { "novo": 5, "contato": 25, "agendamento": 55, "cliente": 75 },
-  "ab_testing": {
-    "A": { "total": 50, "convertido": 8, "taxa": "16%", "nome_variante": "consulta_gratuita" },
-    "B": { "total": 50, "convertido": 12, "taxa": "24%", "nome_variante": "sem_risco" }
-  },
-  "eventos": { "primeiro_contato": 100, "lead_quente": 15, "consulta_agendada": 15, "followup_2h": 40 }
-}
-```
+| POST | `/webhook/zapi-escritorio` | Webhook do escritório (só salva, sem IA) |
 
 ## Banco de Dados (Supabase — compartilhado com CRM)
 
@@ -123,67 +67,101 @@ Mesmo objeto acima + conversas vinculadas:
 
 **mensagens** — histórico de mensagens
 - `id`, `conversa_id`, `role` (user/assistant), `content`
-- `media_url`, `media_type` (audio/image/document)
+- `media_url`, `media_type` (audio/image/document/video)
 - `manual` (bool), `usuario_nome`, `criado_em`
 
 **metricas** — eventos rastreados
 - `id`, `conversa_id`, `lead_id`, `evento`, `detalhes`, `escritorio`, `criado_em`
-- Eventos: primeiro_contato, lead_quente, consulta_agendada, followup_2h, followup_4h, followup_24h, followup_72h, etapa_avancou, objecao, alucinacao_detectada, feedback_mensagem, prazo_prescricional, auditoria_acesso
+- Eventos: primeiro_contato, lead_quente, consulta_agendada, followup_2h, followup_4h, followup_24h, followup_72h, etapa_avancou, objecao, alucinacao_detectada, feedback_mensagem, prazo_prescricional, auditoria_acesso, lembrete_*
+
+**dias_nao_uteis** — feriados adicionais, enforcados, férias da equipe
+- `id`, `data` (YYYY-MM-DD), `tipo` (enforcado/feriado/ferias), `descricao`, `escritorio`
 
 **tarefas** — tarefas do CRM
-- `id`, `descricao`, `data_limite`, `prioridade`, `status`, `responsavel`
-
 **aprendizados** — lições aprendidas pela IA
-- `tipo`, `categoria`, `licao`, `contexto`, `resultado`, `efetividade`, `vezes_usado`
-
 **npl_clientes_processos** — base de clientes antigos (importada)
-- `nome_cliente`, `nome_normalizado`, `parte_contraria`, `materia`, `numero_processo`, `status_fase`
-
-## Lead Scoring (automático)
-Calculado a cada mensagem do lead. Critérios:
-- Engajamento: 3+ msgs (+10), 6+ msgs (+10)
-- Velocidade: resposta <2min (+15), <10min (+5)
-- Mídia: áudio (+10), documento (+15)
-- Urgência: palavras urgentes (+15), "quero agendar" (+20)
-- Negativo: hesitante (-10), sem interesse (-30)
-
-## A/B Testing
-- Variante A ("consulta_gratuita"): "A consulta inicial é gratuita e sem compromisso"
-- Variante B ("sem_risco"): "Você não paga nada pela primeira consulta"
-- Atribuída ao criar lead, determinística pelo ID
-- Resultados visíveis em /api/analytics
 
 ## Modelo de IA
 - **Claude Sonnet 4** (claude-sonnet-4-20250514) — modelo principal para conversas
 - MAX_TOKENS: 800 (respostas objetivas)
 - Janela de contexto: 150 mensagens enviadas ao Claude
 - Ficha do lead: 40 mensagens anteriores resumidas
-- trimResponse: máx 6 frases / 800 chars
-- Transparência: Laura se apresenta como IA, oferece falar com advogado a qualquer momento
+- trimResponse: máx 8 frases
+
+## Primeiro Contato (programático — não depende da IA)
+Quando um lead manda a primeira mensagem, o servidor envia 3 msgs em sequência:
+
+1. **Apresentação** (servidor): Laura se apresenta como IA, diz que pode errar e que tudo será revisado pelo advogado. Não cuida do caso, só faz primeiro contato.
+2. **Credibilidade** (servidor): centenas de trabalhadores ajudados, registrados na OAB, link https://npladvogados.com.br
+3. **Resposta** (Laura IA): responde ao conteúdo da mensagem do lead (empatia + primeira pergunta da triagem)
+
+Race protection: `primeiroContatoEnviado` Set impede duplicação quando lead manda msgs rápidas.
 
 ## Módulos de inteligência da Laura
-- `teses.js`: detecta tipo de caso (rescisão indireta, horas extras, sem registro, acidente/doença, assédio, verbas rescisórias, insalubridade) e injeta contexto técnico
-- `objecoes.js`: detecta objeções (preço, pensar, já tem advogado, desconfiança, medo de retaliação, tempo, dúvida do caso) e injeta estratégia de resposta
-- `verbas.js`: calculadora CLT de rescisão; extrai salário/tempo/motivo da conversa e gera estimativa preliminar
-- `prescricao.js`: extrai "saiu há X" e alerta sobre prazo de 2 anos (níveis: ok/atenção/urgente/prescrito)
-- `alucinacao.js`: pós-análise das respostas para detectar promessas fora da política (garantia de resultado, valor definitivo, falsa credencial, honorários, conselho jurídico final); severidade alta notifica Dr. Osmar
-- `checkLembretesConsulta`: jobs agendados enviam 48h (cobrança docs), 24h (confirmação), 08h matinal, 1h, 30min antes; +2h depois re-engaja no-show se lead ainda em etapa agendamento
-- Resumo automático do caso: após agendar consulta, Claude gera resumo executivo salvo em `leads.notas` (TIPO DE AÇÃO, VÍNCULO, SITUAÇÃO, FATOS, URGÊNCIA, PONTOS DE ATENÇÃO)
-- Auditoria: acesso a leads/mensagens/documentos registra evento `auditoria_acesso` com usuário, IP, endpoint
+- `teses.js`: detecta tipo de caso e injeta contexto técnico + perguntas de aprofundamento
+- `objecoes.js`: detecta 7 tipos de objeção e injeta estratégia de resposta
+- `verbas.js`: calculadora CLT de rescisão
+- `prescricao.js`: alerta sobre prazo de 2 anos (ok/atenção/urgente/prescrito)
+- `alucinacao.js`: pós-análise das respostas (promessas fora da política); severidade alta notifica Dr. Osmar
+- Resumo automático do caso: após agendar, Claude gera resumo executivo salvo em `leads.notas`
+- Auditoria: acesso a dados sensíveis registra evento `auditoria_acesso`
 
 ## Agendamento (Google Calendar)
-- Detecção: só cria evento quando Laura diz "Agendado!" + data/hora
-- Slot extraído da RESPOSTA da Laura (não do texto do lead)
-- Anti-duplo: verifica metricas no banco (48h)
-- Bloqueios: prefeitura/governo verificados no servidor antes de criar
+- Horários válidos: 9h, 10h, 11h, 14h, 15h, 16h (seg-sex). **12h, 13h, 17h, 18h NÃO existem**.
+- Detecção: exige "Agendado!" no início da resposta da Laura + dia + hora
+- Slot extraído APENAS da resposta da Laura (nunca do texto do lead — evita capturar datas mencionadas em outro contexto)
+- Fallback: `construirSlotDeTexto` parseia dia+hora direto da confirmação quando `encontrarSlot` falha
+- Anti-duplo: verifica metricas (30 dias) + Google Calendar + agendamentoLock Set
+- Bloqueios: prefeitura/governo verificados nas 2 últimas msgs do lead (não histórico inteiro)
 - Referência: "já está agendada" não dispara novo evento
-- Remarcação: detecta pedidos de mudança, cancela antigo + cria novo
-- Reserva: 20 minutos por slot
-- Escassez: comunica "últimos horários" quando ≤3 slots
-- Janela: busca 10 dias úteis
-- **Funil**: ao criar consulta, lead é movido automaticamente para etapa `agendamento` (não regride se já estiver em `documentos` ou `cliente`)
-- Leads em `agendamento`, `documentos` ou `cliente` não recebem follow-ups nem entram em recuperação de vácuo
-- Etapa `documentos` = pós-consulta, cliente coletando documentos; `cliente` = fechou contrato
+- Remarcação: exige palavras específicas (remarcar/mudar/trocar + consulta/horário), cancela antigo + cria novo. Se cancel falhar, alerta Osmar.
+- Reserva: 20 minutos por slot (`slotsReservados` Map)
+- Rodízio: Dra. Luma, Dra. Sophia, Luiza — desempate aleatório (não enviesa)
+- Luiza: seg/qua/qui manhã, ter/sex tarde
+- Conflict check: qualquer evento não-cancelado no Calendar bloqueia (não só "Consulta Trabalhista")
+- `dias_nao_uteis`: tabela do Supabase verificada ao gerar slots (enforcados, férias da equipe)
+- Cache de horários: 5 minutos, só popula quando sem phoneAtual
+- Year rollover: "02/01" em dezembro cria corretamente em janeiro do próximo ano
+- Funil: ao criar consulta, lead move para etapa `agendamento` (não regride documentos/cliente)
+- Endpoint manual: `POST /api/agendamentos/manual` — CRM pode agendar direto
+
+## Lembretes de Consulta (persistidos em metricas)
+- 48h antes: cobrança de documentos
+- 24h antes: confirmação
+- 08h matinal: lembrete do dia
+- 1h antes: lembrete
+- 30min antes: lembrete final
+- +2h depois: re-engajamento no-show (só se lead NÃO respondeu após a consulta)
+- Dedup: persistido em metricas (evento `lembrete_<chave>`) — sobrevive a deploys
+- Instância: cada lembrete usa `consulta.origem` (escritório ou prospecção) para enviar pelo número correto
+
+## Follow-ups (automáticos, 8h-20h Belém)
+- 2h, 4h, 24h, 72h sem resposta do lead
+- Contador usa eventos `followup_Xh` em metricas (não conta msgs programáticas como follow-ups)
+- 72h marca lead como `perdido`
+- Não se aplica a leads em etapa `agendamento`, `documentos`, `cliente` ou `perdido`
+- Proteção extra: verifica `consulta_agendada` em metricas antes de enviar
+
+## Extração de Nomes
+- **pushName do WhatsApp**: emojis removidos, cargos/empresas filtrados
+- **Mensagem do lead**: padrões "me chamo X", "sou X", nome completo em linha isolada
+- **Proteção**: não sobrescreve nomes editados manualmente no CRM
+- **Título da conversa**: sincroniza quando lead ganha nome real; atualiza se pushName muda
+- **Filtro de falsos positivos**: palavrasComuns + verbos conjugados rejeitados
+
+## Captura de Mensagens Multi-Device
+### Z-API (fromMe)
+- Mensagens enviadas pelo celular/WhatsApp Web chegam via webhook `fromMe=true`
+- Phone pode vir como `@lid` (Multi-Device privacy) — resolvido via cache `lidPhoneMap`
+- Cache populado apenas de msgs incoming (fromMe=false) — impede cache poisoning
+- Resolução fallback: match por chatName nas conversas (com normalização de acentos)
+- Dedup: `wasBotRecentSend` (60s) + `processedMessages` Map (TTL 30min por entrada) + conteúdo ±2min
+
+### Datacrazy (Cloud API)
+- Equipe usa Datacrazy (WhatsApp Cloud API) para atendimento — pipeline separada da Z-API
+- Polling a cada 15s: busca 10 conversas mais recentes, filtra msgs enviadas desde último sync
+- Dedup: conteúdo + prefix (50 chars) em janela de ±3 minutos
+- Requer variável `DATACRAZY_API_TOKEN` no Render
 
 ## Equipe do escritório NPLADVS
 - Sócios: Dr. Osmar Neves, Dr. Bruno Pinheiro, Dr. Rodrigo Lins
@@ -192,59 +170,39 @@ Calculado a cada mensagem do lead. Critérios:
 - Se alguém mencionar um desses nomes, Laura trata como cliente existente em tratativa
 
 ## Feriados reconhecidos automaticamente (2025-2027)
-Nacionais + Estadual PA + Municipais Belém:
-- Ano Novo, Carnaval, Sexta-feira Santa, Tiradentes, Dia do Trabalho
-- Corpus Christi, Adesão do Pará (15/08), Independência, Aparecida
-- Segunda pós-Círio, Finados, Proclamação, N.S. Conceição (08/12), Natal
-
-Para feriados adicionais, enforcados e férias da equipe, use a tabela `dias_nao_uteis`.
+Nacionais + Estadual PA + Municipais Belém (hardcoded em calendar.js).
+Para feriados adicionais, enforcados e férias da equipe, use a tabela `dias_nao_uteis` (verificada ao gerar slots E no fallback construirSlotDeTexto).
 
 ## Bloqueios automáticos
-- Prefeitura/governo municipal → não agenda
+- Prefeitura/governo municipal → não agenda (verifica só 2 últimas msgs + atual, não histórico inteiro)
 - Servidor público → pede confirmação
 - Vínculo < 3 meses → não agenda
 - Prescrição > 2 anos → não agenda
 - Lead sem interesse → encerra
 - **Trabalhador rural = CLT = ATENDE** (não confundir com governo)
 
-## Follow-ups (automáticos, 8h-20h Belém)
-- 2h: texto
-- 4h: texto
-- 24h: texto
-- 72h: texto + marca lead como perdido
-- Não se aplica a leads em etapa `agendamento`, `documentos`, `cliente` ou `perdido`
-- Validação: descarta mensagens inválidas antes de enviar
-- Contexto: referencia o caso específico do lead
-
-## Áudio
-- ElevenLabs: desativa automaticamente quando sem crédito
-- Fallback: OpenAI TTS (formato Opus/OGG nativo WhatsApp)
-- Geração: só quando lead envia áudio (não em follow-ups/confirmações)
-- CRM: /api/enviar-audio salva media_url para player funcionar
-
-## Mensagens outbound
-- Quando atendente envia primeiro (isFromMe), cria conversa + lead
-- Mensagem salva no histórico como manual
-
-## Identificação de clientes existentes
-- Busca por nome na tabela npl_clientes_processos
-- Usa parte_contrária (empresa) para desambiguar homônimos
-- 2 tentativas de confirmação, depois segue como lead novo
-
 ## Multi-instância Z-API
-O servidor suporta 2 números WhatsApp simultâneos:
-
 **Número 01 — Escritório** (ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN)
 - Laura silenciosa durante horário comercial (seg-sex 8h-18h Belém)
-- Laura ativa à noite e fins de semana
-- Equipe atende durante o dia pelo CRM
+- Laura ativa à noite, fins de semana e feriados
+- Equipe atende durante o dia pelo CRM/Datacrazy
 
 **Número 02 — Prospecção** (ZAPI_INSTANCE_ID_PROSPECCAO, ZAPI_TOKEN_PROSPECCAO, ZAPI_CLIENT_TOKEN_PROSPECCAO)
 - Laura ativa 24/7
 - Foco em prospecção de leads
-- Leads que viraram cliente permanecem neste número
 
-Detecção automática: o webhook identifica a instância pelo `instanceId` do payload Z-API.
+## Caches em memória (server.js)
+| Cache | Tipo | Cleanup | Propósito |
+|-------|------|---------|-----------|
+| `processedMessages` | Map<id,ts> | TTL 30min por entrada | Dedup webhook Z-API |
+| `pausedConversas` | Map<phone,until> | 10min sweep | Pausa da IA |
+| `agendamentoLock` | Set<phone> | try/finally | Anti-race agendamento |
+| `primeiroContatoEnviado` | Set<phone> | Cap 1000 | Anti-race apresentação |
+| `lidPhoneMap` | Map<lid,phone> | Cap 5000 | @lid → telefone |
+| `jaNotificouHot` | Set<phone> | Cap 1000 | Notificação de lead quente |
+| `clientesConfirmados` | Map<phone,obj> | 7 dias / 6h sweep | Clientes antigos confirmados |
+| `lembretesCache` | Map<chave,ts> | 7 dias / 1h sweep | Otimização dedup lembretes (source of truth = metricas) |
+| `slotsReservados` | Map<iso,obj> | 5min sweep | Reserva 20min de slots oferecidos |
 
 ## Configuração
 Variáveis de ambiente no Render:
@@ -252,7 +210,9 @@ Variáveis de ambiente no Render:
 - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`
 - `SUPABASE_URL`, `SUPABASE_KEY`
 - `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`
+- `ZAPI_INSTANCE_ID_PROSPECCAO`, `ZAPI_TOKEN_PROSPECCAO`, `ZAPI_CLIENT_TOKEN_PROSPECCAO`
 - `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_CREDENTIALS`
 - `OSMAR_PHONE`, `ALLOWED_ORIGINS`
-- `ZAPI_INSTANCE_ID_PROSPECCAO`, `ZAPI_TOKEN_PROSPECCAO`, `ZAPI_CLIENT_TOKEN_PROSPECCAO`
+- `DATACRAZY_API_TOKEN` — token Bearer da API Datacrazy (polling mensagens)
+- `DATACRAZY_SYNC_INTERVAL_SECS` (default: 15) — intervalo do polling
 - `OFFICE_BUSINESS_HOURS_START` (default: 8), `OFFICE_BUSINESS_HOURS_END` (default: 18)
