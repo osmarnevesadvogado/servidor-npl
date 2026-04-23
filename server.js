@@ -776,9 +776,23 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       );
     }
 
-    // Metrica de primeiro contato
+    // Metrica de primeiro contato + mensagem de credibilidade
     if (history.length <= 1) {
       await db.trackEvent(conversa.id, lead?.id, 'primeiro_contato', senderName);
+
+      // Segunda mensagem automática: autoridade e confiança
+      const msgCredibilidade =
+        `O escritorio Neves Pinheiro Lins Sociedade de Advogados ja ajudou centenas de trabalhadores de todo o pais, principalmente trabalhadores paraenses, a conquistarem seus direitos.\n\n` +
+        `Somos um escritorio registrado na OAB, com CNPJ ativo e equipe de advogados especializados em direito do trabalho.\n\n` +
+        `Conheca nossa equipe e estrutura: https://npladvogados.com.br`;
+      setTimeout(async () => {
+        try {
+          await whatsapp.sendText(phone, msgCredibilidade, instancia);
+          await db.saveMessage(conversa.id, 'assistant', msgCredibilidade);
+        } catch (e) {
+          console.log('[CREDIBILIDADE-NPL] Erro ao enviar:', e.message);
+        }
+      }, 3000); // 3s de delay pra não chegar junto com a primeira msg
     }
 
     console.log(`[REPLY-NPL] Para ${phone}: ${reply.slice(0, 80)}...`);
