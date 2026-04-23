@@ -1460,14 +1460,40 @@ app.post('/webhook/zapi', async (req, res) => {
 
     // Número 01 (escritório): Laura silenciosa durante horário comercial
     if (instancia === 'escritorio' && !isFromMe && await whatsapp.isHorarioComercial()) {
-      // Salvar mensagem mas não responder (equipe atende)
       const phone = body.phone || body.from?.replace('@c.us', '') || '';
       if (phone) {
         try {
+          const senderName = whatsapp.limparNomeContato(body.senderName || body.pushName || body.notifyName || body.chatName || '');
+          const lead = await db.getOrCreateLead(phone, senderName);
           const conversa = await db.getOrCreateConversa(phone);
+
+          // Sincronizar titulo/lead_id mesmo sem IA ativa
+          if (lead && conversa) {
+            const tituloIdeal = (senderName && senderName.trim()) || lead.nome || conversa.titulo;
+            const tituloAtual = conversa.titulo || '';
+            const tituloEhFallback = !tituloAtual || tituloAtual === 'WhatsApp' || tituloAtual.startsWith('WhatsApp ') || /^\+?\(?\d/.test(tituloAtual);
+            if (!conversa.lead_id || tituloEhFallback) {
+              await db.updateConversa(conversa.id, { lead_id: lead.id, titulo: tituloIdeal });
+            }
+          }
+
           const text = body.text?.message || body.body || '';
-          if (text) await db.saveMessage(conversa.id, 'user', text);
-        } catch (e) {}
+          if (text) {
+            await db.saveMessage(conversa.id, 'user', text);
+            await db.extractAndUpdateLead(lead.id, text);
+          }
+
+          // Mídia (imagem, doc, áudio) — salvar mesmo sem IA
+          const { text: mediaText, mediaUrl, mediaType } = extrairTextoEMidia(body);
+          if (mediaType && conversa) {
+            const extras = {};
+            if (mediaUrl) extras.media_url = mediaUrl;
+            if (mediaType) extras.media_type = mediaType;
+            await db.saveMessage(conversa.id, 'user', mediaText || `[${mediaType}]`, extras);
+          }
+        } catch (e) {
+          console.log('[ESCRITORIO-NPL] Erro:', e.message);
+        }
       }
       console.log(`[ESCRITORIO-NPL] Horario comercial - msg salva sem IA: ${phone}`);
       return res.json({ status: 'office_hours' });

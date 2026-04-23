@@ -38,7 +38,7 @@ async function getOrCreateConversa(phone) {
 
   const { data: newConv } = await supabase
     .from('conversas')
-    .insert({ telefone: tel, titulo: 'WhatsApp', escritorio: ESC, instancia: INST })
+    .insert({ telefone: tel, titulo: formatarTelefoneBR(tel), escritorio: ESC, instancia: INST })
     .select()
     .single();
 
