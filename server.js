@@ -145,6 +145,12 @@ setInterval(() => {
   for (const [phone, until] of pausedConversas) {
     if (now > until) pausedConversas.delete(phone);
   }
+  // Cap de segurança no lidPhoneMap — evita crescimento ilimitado
+  if (typeof lidPhoneMap !== 'undefined' && lidPhoneMap.size > 5000) {
+    const toRemove = lidPhoneMap.size - 4000;
+    const keys = Array.from(lidPhoneMap.keys()).slice(0, toRemove);
+    keys.forEach(k => lidPhoneMap.delete(k));
+  }
 }, 10 * 60 * 1000);
 
 // ===== CONTROLE DE NOTIFICAÇÃO DE LEAD QUENTE =====
@@ -172,6 +178,39 @@ const agendamentoLock = new Set(); // phones em processo de agendamento
 // a Z-API mascara o telefone do destinatario como @lid. Mantemos este
 // cache populado a partir de webhooks que tem telefone limpo + chatLid.
 const lidPhoneMap = new Map();
+
+// Notifica Dr. Osmar via WhatsApp quando um agendamento falha silenciosamente
+function notificarFalhaAgendamento(nome, phone, motivo) {
+  if (!config.OSMAR_PHONE) return;
+  whatsapp.sendText(
+    config.OSMAR_PHONE,
+    `[LAURA - ALERTA] Agendamento FALHOU para ${nome} (${phone}).\n\nLaura disse "Agendado!" mas ${motivo}`
+  ).catch(() => {});
+}
+
+// Extrai texto + mídia de payload do webhook Z-API (mesmo formato em várias origens)
+const MEDIA_TYPES = [
+  { keys: ['image', 'imageMessage'], urlKeys: ['imageUrl', 'url', 'mediaUrl'], type: 'image', fallback: '[Imagem]' },
+  { keys: ['audio', 'audioMessage'], urlKeys: ['audioUrl', 'url', 'mediaUrl'], type: 'audio', fallback: '🎤 Áudio' },
+  { keys: ['document', 'documentMessage'], urlKeys: ['documentUrl', 'url', 'mediaUrl'], type: 'document', fallback: '[Documento]', captionKeys: ['caption', 'fileName'] },
+  { keys: ['video', 'videoMessage'], urlKeys: ['videoUrl', 'url', 'mediaUrl'], type: 'video', fallback: '[Vídeo]' }
+];
+
+function extrairTextoEMidia(body) {
+  let text = body.text?.message || body.body || '';
+  let mediaUrl = null;
+  let mediaType = null;
+  for (const def of MEDIA_TYPES) {
+    const obj = def.keys.map(k => body[k]).find(Boolean);
+    if (!obj) continue;
+    mediaUrl = def.urlKeys.map(k => obj[k]).find(Boolean) || null;
+    mediaType = def.type;
+    const caption = (def.captionKeys || ['caption']).map(k => obj[k]).find(Boolean);
+    text = caption || text || def.fallback;
+    break;
+  }
+  return { text, mediaUrl, mediaType };
+}
 
 // Tenta resolver @lid -> telefone usando cache ou buscando por nome nas conversas
 async function resolverLidParaPhone(chatLid, chatName) {
@@ -694,27 +733,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
             }
           } else {
             console.log('[CALENDAR-NPL] Falha ao criar evento (calendar retornou null)');
-            // ALERTA: Laura prometeu agendamento mas o evento não foi criado
-            if (config.OSMAR_PHONE) {
-              const nome = lead?.nome || phone;
-              whatsapp.sendText(config.OSMAR_PHONE,
-                `[LAURA - ALERTA] Agendamento FALHOU para ${nome} (${phone}).\n\n` +
-                `Laura disse "Agendado!" mas o evento nao foi criado no Calendar. ` +
-                `Verificar manualmente e confirmar com o lead.`
-              ).catch(() => {});
-            }
+            notificarFalhaAgendamento(lead?.nome || phone, phone, 'o evento nao foi criado no Calendar. Verificar manualmente e confirmar com o lead.');
           }
         } else {
           console.log('[CALENDAR-NPL] Não encontrou slot correspondente à escolha do lead');
-          // ALERTA: Laura disse "Agendado!" mas não achou slot
-          if (config.OSMAR_PHONE) {
-            const nome = lead?.nome || phone;
-            whatsapp.sendText(config.OSMAR_PHONE,
-              `[LAURA - ALERTA] Agendamento FALHOU para ${nome} (${phone}).\n\n` +
-              `Laura disse "Agendado!" mas nao encontrou slot no Calendar. ` +
-              `Resposta: "${reply.slice(0, 150)}"\nVerificar e agendar manualmente.`
-            ).catch(() => {});
-          }
+          notificarFalhaAgendamento(lead?.nome || phone, phone, `nao encontrou slot no Calendar. Resposta: "${reply.slice(0, 150)}"\nVerificar e agendar manualmente.`);
         }
       } catch (e) {
         console.log('[CALENDAR-NPL] Erro ao criar evento no agendamento:', e.message);
@@ -1374,74 +1397,42 @@ app.post('/webhook/zapi', async (req, res) => {
         return res.json({ status: 'bot_sent' });
       }
 
-      // Dedup por messageId (evita processar mesmo webhook 2x)
       if (messageId && processedMessages.has(messageId)) {
         return res.json({ status: 'duplicate' });
       }
       if (messageId) processedMessages.add(messageId);
 
-      if (phone) {
-        pauseAI(phone, 30);
-        console.log(`[MANUAL-NPL] Atendente respondeu para ${phone} - IA pausada 30min`);
+      pauseAI(phone, 30);
+      console.log(`[MANUAL-NPL] Atendente respondeu para ${phone} - IA pausada 30min`);
 
-        try {
-          const conversa = await db.getOrCreateConversa(phone);
-          await db.getOrCreateLead(phone);
+      try {
+        const conversa = await db.getOrCreateConversa(phone);
+        await db.getOrCreateLead(phone);
 
-          // Extrair texto e mídia do payload
-          let text = body.text?.message || body.body || '';
-          let mediaUrl = null;
-          let mediaType = null;
+        const { text, mediaUrl, mediaType } = extrairTextoEMidia(body);
 
-          if (body.image || body.imageMessage) {
-            const img = body.image || body.imageMessage;
-            mediaUrl = img.imageUrl || img.url || img.mediaUrl;
-            mediaType = 'image';
-            text = img.caption || text || '[Imagem]';
-          }
-          if (body.audio || body.audioMessage) {
-            const aud = body.audio || body.audioMessage;
-            mediaUrl = aud.audioUrl || aud.url || aud.mediaUrl;
-            mediaType = 'audio';
-            text = text || '🎤 Áudio';
-          }
-          if (body.document || body.documentMessage) {
-            const doc = body.document || body.documentMessage;
-            mediaUrl = doc.documentUrl || doc.url || doc.mediaUrl;
-            mediaType = 'document';
-            text = doc.caption || doc.fileName || text || '[Documento]';
-          }
-          if (body.video || body.videoMessage) {
-            const vid = body.video || body.videoMessage;
-            mediaUrl = vid.videoUrl || vid.url || vid.mediaUrl;
-            mediaType = 'video';
-            text = vid.caption || text || '[Vídeo]';
+        if (text && conversa) {
+          const { data: recente } = await db.supabase
+            .from('mensagens')
+            .select('id')
+            .eq('conversa_id', conversa.id)
+            .eq('content', text)
+            .gte('criado_em', new Date(Date.now() - 120000).toISOString())
+            .limit(1);
+
+          if (recente && recente.length > 0) {
+            console.log(`[MANUAL-NPL] Dedup echo: "${text.slice(0, 50)}" já salvo`);
+            return res.json({ status: 'dedup_echo' });
           }
 
-          if (text && conversa) {
-            // Dedup conteúdo: se mensagem idêntica foi salva nos últimos 2min, é echo do bot
-            const { data: recente } = await db.supabase
-              .from('mensagens')
-              .select('id')
-              .eq('conversa_id', conversa.id)
-              .eq('content', text)
-              .gte('criado_em', new Date(Date.now() - 120000).toISOString())
-              .limit(1);
-
-            if (recente && recente.length > 0) {
-              console.log(`[MANUAL-NPL] Dedup echo: "${text.slice(0, 50)}" já salvo`);
-              return res.json({ status: 'dedup_echo' });
-            }
-
-            const extras = { manual: true };
-            if (mediaUrl) extras.media_url = mediaUrl;
-            if (mediaType) extras.media_type = mediaType;
-            await db.saveMessage(conversa.id, 'assistant', text, extras);
-            console.log(`[MANUAL-NPL] ${phone}: "${text.slice(0, 60)}" (${mediaType || 'texto'})`);
-          }
-        } catch (e) {
-          console.log('[MANUAL-NPL] Erro ao salvar msg externa:', e.message);
+          const extras = { manual: true };
+          if (mediaUrl) extras.media_url = mediaUrl;
+          if (mediaType) extras.media_type = mediaType;
+          await db.saveMessage(conversa.id, 'assistant', text, extras);
+          console.log(`[MANUAL-NPL] ${phone}: "${text.slice(0, 60)}" (${mediaType || 'texto'})`);
         }
+      } catch (e) {
+        console.log('[MANUAL-NPL] Erro ao salvar msg externa:', e.message);
       }
       return res.json({ status: 'manual_detected' });
     }
@@ -2318,8 +2309,7 @@ app.post('/api/agendamentos/manual', requireApiKey, async (req, res) => {
       return res.status(400).json({ error: 'Formato inválido. data: YYYY-MM-DD, hora: número 0-23' });
     }
 
-    const { criarDataBelem } = require('./calendar');
-    const inicio = criarDataBelem(ano, mes - 1, dia, horaNum, 0);
+    const inicio = calendar.criarDataBelem(ano, mes - 1, dia, horaNum, 0);
 
     if (inicio <= new Date()) {
       return res.status(400).json({ error: 'Horário no passado' });
@@ -2722,31 +2712,30 @@ async function syncDatacrazy() {
       return;
     }
 
-    let totalSalvas = 0;
+    // Fetch de mensagens em paralelo (I/O independente)
+    const convsValidas = convComNovaMsg.filter(c => {
+      const p = c.contact?.phoneNumber || c.contact?.contactId;
+      return p && /^\d{10,15}$/.test(p);
+    });
 
-    for (const conv of convComNovaMsg) {
-      const phone = conv.contact?.phoneNumber || conv.contact?.contactId;
-      if (!phone || !/^\d{10,15}$/.test(phone)) continue;
-
-      const msgResp = await fetch(
+    const fetches = await Promise.allSettled(convsValidas.map(conv =>
+      fetch(
         `https://api.g1.datacrazy.io/api/v1/conversations/${conv.id}/messages?take=5`,
         { headers, signal: AbortSignal.timeout(10000) }
-      );
-      if (!msgResp.ok) {
-        console.log(`[DATACRAZY-SYNC] Msgs ${conv.id}: HTTP ${msgResp.status}`);
-        continue;
-      }
-      const msgData = await msgResp.json();
-      const mensagens = msgData.messages || msgData.data || [];
+      ).then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+        .then(d => ({ conv, mensagens: d.messages || d.data || [] }))
+    ));
+
+    let totalSalvas = 0;
+    for (const result of fetches) {
+      if (result.status !== 'fulfilled') continue;
+      const { conv, mensagens } = result.value;
+      const phone = conv.contact?.phoneNumber || conv.contact?.contactId;
 
       const novas = mensagens.filter(m =>
-        !m.received &&
-        !m.isInternal &&
-        m.body &&
-        m.body.trim().length > 0 &&
+        !m.received && !m.isInternal && m.body && m.body.trim().length > 0 &&
         new Date(m.createdAt) > sinceDate
       );
-
       if (novas.length === 0) continue;
 
       const conversa = await db.getOrCreateConversa(phone);
