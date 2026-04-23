@@ -433,6 +433,19 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Gerar e enviar resposta (excluir última msg do history pois já vai na ficha)
     const fullHistory = await db.getHistory(conversa.id);
     const history = fullHistory.slice(0, -1);
+    const ehPrimeiroContato = history.filter(m => m.role === 'assistant').length === 0;
+
+    // Primeiro contato: enviar apresentação PROGRAMÁTICA antes da resposta da IA
+    // Garante que a Laura sempre se apresenta, mesmo quando o lead vem com frase pronta do Meta
+    if (ehPrimeiroContato) {
+      const msgApresentacao =
+        `Ola! Sou a Laura, assistente virtual (IA) do escritorio Neves Pinheiro Lins, especializado em direitos trabalhistas. ` +
+        `Estou aqui pra entender o seu caso e, se fizer sentido, agendar uma consulta gratuita com um dos nossos advogados. ` +
+        `Por ser IA, posso cometer erros — tudo que conversarmos aqui sera revisado e confirmado pelo advogado responsavel na consulta. ` +
+        `Eu nao cuido do caso, apenas faco o primeiro contato.`;
+      await whatsapp.sendText(phone, msgApresentacao, instancia);
+      await db.saveMessage(conversa.id, 'assistant', msgApresentacao);
+    }
 
     // Tracking de prazo prescricional — se detecta urgência/prescrito, rastreia uma vez
     try {
