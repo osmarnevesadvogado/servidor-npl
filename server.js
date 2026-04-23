@@ -115,7 +115,23 @@ function flushBuffer(cleanP) {
 
 // ===== CONTROLE DE PAUSA =====
 const pausedConversas = new Map();
-const processedMessages = new Set();
+// Map<messageId, timestamp> — dedup com TTL individual (30min por entrada).
+// Antes era Set com clear() global a cada 10min — Z-API retry >10min processava 2x.
+const processedMessages = new Map();
+const PROCESSED_MSG_TTL = 30 * 60 * 1000;
+function processedMessagesHas(id) {
+  if (!id) return false;
+  const ts = processedMessages.get(id);
+  if (!ts) return false;
+  if (Date.now() - ts > PROCESSED_MSG_TTL) {
+    processedMessages.delete(id);
+    return false;
+  }
+  return true;
+}
+function processedMessagesAdd(id) {
+  if (id) processedMessages.set(id, Date.now());
+}
 
 // ===== VERIFICAÇÃO DE CLIENTE ANTIGO =====
 // Armazena clientes pendentes de confirmação: phone -> { processos, tentativas }
@@ -138,10 +154,13 @@ function isAIPaused(phone) {
 
 // ===== LIMPEZA PERIÓDICA =====
 setInterval(() => {
-  processedMessages.clear();
+  const now = Date.now();
+  // processedMessages: remove entradas >30min (TTL individual)
+  for (const [id, ts] of processedMessages) {
+    if (now - ts > PROCESSED_MSG_TTL) processedMessages.delete(id);
+  }
   whatsapp.cleanup();
   fluxo.cleanup();
-  const now = Date.now();
   for (const [phone, until] of pausedConversas) {
     if (now > until) pausedConversas.delete(phone);
   }
@@ -151,6 +170,11 @@ setInterval(() => {
     const keys = Array.from(lidPhoneMap.keys()).slice(0, toRemove);
     keys.forEach(k => lidPhoneMap.delete(k));
   }
+  // primeiroContatoEnviado cresce indefinidamente — limpa junto. Ok limpar a cada 10min
+  // pois o propósito é só proteger contra race entre mensagens consecutivas (segundos).
+  if (primeiroContatoEnviado.size > 1000) primeiroContatoEnviado.clear();
+  // jaNotificouHot também cresce indefinidamente — limpa após 1000 entradas
+  if (jaNotificouHot.size > 1000) jaNotificouHot.clear();
 }, 10 * 60 * 1000);
 
 // ===== CONTROLE DE NOTIFICAÇÃO DE LEAD QUENTE =====
@@ -159,19 +183,25 @@ const jaNotificouHot = new Set(); // phones já notificados como lead quente
 // ===== CLIENTES EXISTENTES CONFIRMADOS (persiste processos durante conversa) =====
 const clientesConfirmados = new Map(); // phone -> { processos, timestamp }
 
-// Limpar cache de clientes confirmados após 24h
+// Limpar cache de clientes confirmados após 7 dias de inatividade (antes era 24h,
+// mas a cleanup batendo mid-processing podia fazer Laura perguntar "você é cliente?"
+// no meio da conversa. 7d cobre sessões longas e ainda evita bloat).
 setInterval(() => {
   const now = Date.now();
   for (const [phone, entry] of clientesConfirmados) {
-    if (now - entry.timestamp > 24 * 60 * 60 * 1000) clientesConfirmados.delete(phone);
+    if (now - entry.timestamp > 7 * 24 * 60 * 60 * 1000) clientesConfirmados.delete(phone);
   }
-}, 60 * 60 * 1000);
+}, 6 * 60 * 60 * 1000);
 
 // ===== CONTROLE DE AGENDAMENTO ÚNICO POR CONVERSA =====
 // Evita que a Laura agende 2 consultas pro mesmo lead
 // Persiste via métricas no banco para sobreviver a deploys
 // + Lock em memória para evitar race condition entre processamentos paralelos
 const agendamentoLock = new Set(); // phones em processo de agendamento
+
+// Evita enviar apresentação + credibilidade 2x quando lead manda msgs em paralelo.
+// Chave = phone limpo. Limpa junto com outros caches.
+const primeiroContatoEnviado = new Set();
 
 // ===== CACHE @lid -> telefone (WhatsApp Multi-Device) =====
 // Quando a equipe manda msg pelo celular/Datacrazy (device vinculado),
@@ -218,27 +248,34 @@ async function resolverLidParaPhone(chatLid, chatName) {
   // 1. Cache
   const cacheado = lidPhoneMap.get(chatLid);
   if (cacheado) return cacheado;
-  // 2. Match por chatName no banco — sanitiza agressivamente antes de usar no filtro
+  // 2. Match por chatName no banco — sanitiza + normaliza acentos pra match robusto
   if (chatName && chatName.trim().length > 2) {
     try {
-      // Remove emojis e mantém apenas letras, números, espaços, hífen e apóstrofo
       const nomeLimpo = chatName
         .replace(/[\u{1F300}-\u{1FAF8}\u{2600}-\u{27BF}]/gu, '')
         .replace(/[^\p{L}\p{M}0-9 .'-]/gu, '')
         .trim()
         .slice(0, 40);
-      // Só prossegue se sobrou algo razoável (evita filtros vazios/injection)
       if (!nomeLimpo || nomeLimpo.length < 3) return null;
+      // Normaliza acentos pra buscar "Cleo" quando chatName é "Cléo"
+      const nomeNormalizado = nomeLimpo.normalize('NFD').replace(/[̀-ͯ]/g, '');
+      // Busca por qualquer uma das 3 variações, filtra em memória
       const { data } = await db.supabase
         .from('conversas')
         .select('telefone, titulo')
         .eq('escritorio', config.ESCRITORIO)
-        .ilike('titulo', `%${nomeLimpo}%`)
-        .limit(5);
-      if (data && data.length === 1 && data[0].telefone) {
-        lidPhoneMap.set(chatLid, data[0].telefone);
-        console.log(`[LID-MAP] Resolvido por nome: ${chatLid} -> ${data[0].telefone} (${chatName})`);
-        return data[0].telefone;
+        .or(`titulo.ilike.%${nomeLimpo}%,titulo.ilike.%${nomeNormalizado}%`)
+        .limit(10);
+      // Match manual removendo acentos de ambos os lados
+      const matches = (data || []).filter(c => {
+        if (!c.titulo) return false;
+        const tituloNorm = c.titulo.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+        return tituloNorm.includes(nomeNormalizado.toLowerCase());
+      });
+      if (matches.length === 1 && matches[0].telefone) {
+        lidPhoneMap.set(chatLid, matches[0].telefone);
+        console.log(`[LID-MAP] Resolvido por nome: ${chatLid} -> ${matches[0].telefone} (${chatName})`);
+        return matches[0].telefone;
       }
     } catch (e) {
       console.log('[LID-MAP] Erro match por nome:', e.message);
@@ -339,11 +376,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Vincular lead a conversa e atualizar título se necessário
     if (lead && conversa) {
       const tituloIdeal = (finalName && finalName.trim()) || lead.nome || conversa.titulo;
-      const precisaAtualizar = !conversa.lead_id ||
-        !conversa.titulo ||
-        conversa.titulo === 'WhatsApp' ||
-        conversa.titulo.startsWith('WhatsApp ') ||
-        /^\+?\(?\d{1,3}\)?/.test(conversa.titulo);
+      const tituloAtual = conversa.titulo || '';
+      const tituloEhFallback = !tituloAtual ||
+        tituloAtual === 'WhatsApp' ||
+        tituloAtual.startsWith('WhatsApp ') ||
+        /^\+?\(?\d{1,3}\)?/.test(tituloAtual);
+      // Atualiza se: lead não vinculado, título é fallback, OU o pushName atual
+      // é um upgrade (mais completo que o título atual — ex: "João" → "João Silva")
+      const pushNameEhUpgrade = finalName &&
+        finalName.trim().length > tituloAtual.length &&
+        finalName.trim().toLowerCase().startsWith(tituloAtual.toLowerCase().split(' ')[0] || '');
+      const precisaAtualizar = !conversa.lead_id || tituloEhFallback || pushNameEhUpgrade;
       if (precisaAtualizar) {
         await db.updateConversa(conversa.id, { lead_id: lead.id, titulo: tituloIdeal });
       }
@@ -472,10 +515,14 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Gerar e enviar resposta (excluir última msg do history pois já vai na ficha)
     const fullHistory = await db.getHistory(conversa.id);
     const history = fullHistory.slice(0, -1);
-    const ehPrimeiroContato = history.filter(m => m.role === 'assistant').length === 0;
+    const cleanPhonePrimeiroContato = whatsapp.cleanPhone(phone);
+    const ehPrimeiroContato =
+      history.filter(m => m.role === 'assistant').length === 0 &&
+      !primeiroContatoEnviado.has(cleanPhonePrimeiroContato);
 
     // Primeiro contato: enviar apresentação + credibilidade ANTES da resposta da IA
     if (ehPrimeiroContato) {
+      primeiroContatoEnviado.add(cleanPhonePrimeiroContato);
       const msgApresentacao =
         `Ola! Sou a Laura, assistente virtual (IA) do escritorio Neves Pinheiro Lins, especializado em direitos trabalhistas. ` +
         `Estou aqui pra entender o seu caso e, se fizer sentido, agendar uma consulta gratuita com um dos nossos advogados. ` +
@@ -574,13 +621,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Se Laura confirmou agendamento, criar evento no Google Calendar
     const replyLower = reply.toLowerCase();
 
-    // Verificar bloqueios no histórico (mesma lógica do ia.js)
-    const allTextBloqueio = (history || []).map(m => m.content).join(' ').toLowerCase() + ' ' + combinedText.toLowerCase();
-    const temBloqueio = /(prefeitura|governo municipal|orgao municipal|órgão municipal|servidor municipal|câmara municipal|camara municipal)/i.test(allTextBloqueio);
+    // Bloqueio: verificar SÓ a mensagem atual + resposta da Laura + 2 últimas
+    // msgs do lead. Histórico completo dava falso positivo (lead diz "trabalhei na
+    // prefeitura há 5 anos" → todo agendamento futuro era barrado silenciosamente).
+    const ultimasMsgsLead = (history || []).filter(m => m.role === 'user').slice(-2).map(m => m.content).join(' ');
+    const textoBloqueio = (ultimasMsgsLead + ' ' + combinedText + ' ' + reply).toLowerCase();
+    const temBloqueio = /(prefeitura|governo municipal|orgao municipal|órgão municipal|servidor municipal|câmara municipal|camara municipal)/i.test(textoBloqueio);
 
-    // Detectar confirmação NOVA — exige "Agendado!" (com exclamação, não interrogação)
-    const temConfirmacao = /agendado\s*!/i.test(reply) ||
-      (/agendad[oa]/i.test(reply) && !/já está agendad|ja esta agendad|agendado\s*\?/i.test(replyLower));
+    // Detectar confirmação NOVA — exige "Agendado!" no INÍCIO da resposta (frase de confirmação).
+    // Sem isso, pegava referências tipo "não agendado ainda" ou "seria bom termos agendado".
+    const temConfirmacao = /^(ok|tudo)?,?\s*agendado\s*!/i.test(reply.trim()) ||
+      /\bagendado\s*!/i.test(reply);
     // Exige DIA e HORA na resposta (não apenas um dos dois)
     const temDia = /(segunda|terça|terca|quarta|quinta|sexta|amanhã|amanha|hoje|\d{1,2}\/\d{1,2}|dia\s+\d{1,2})/i.test(replyLower);
     const temHora = /(\d{1,2})\s*(?:h|hrs?|horas?)/i.test(replyLower) || /[àa]s\s+\d{1,2}/i.test(replyLower);
@@ -598,9 +649,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       // Verificar se já agendou
       const agendamentoExistente = await verificarJaAgendou(phone);
 
-      // Detectar remarcação: somente palavras EXPLÍCITAS de mudança (não "pode ser"/"bora" que são confirmação)
-      const allTextLower = (history || []).slice(-6).map(m => m.content).join(' ').toLowerCase() + ' ' + combinedText.toLowerCase();
-      const remarcacaoExplicita = /(remarc|mudar hor|mudar a consult|trocar hor|trocar a consult|cancelar|adiar|nao vou poder|não vou poder|outro dia|outro hor[aá]rio|posso mudar|posso trocar|pode ser outro dia|tem outro hor)/.test(allTextLower);
+      // Detectar remarcação: SÓ checa as 2 últimas msgs do lead (histórico inteiro
+      // dava falso positivo quando lead falou "cancelar dúvida" em msg antiga).
+      // Requer verbo + contexto de consulta/horário, nunca só "cancelar" solto.
+      const ultimasDuas = (history || []).filter(m => m.role === 'user').slice(-2).map(m => m.content).join(' ').toLowerCase() + ' ' + combinedText.toLowerCase();
+      const remarcacaoExplicita = /(remarc[a-zçã]+\s+(a\s+)?(consult|hor|reuni)|mudar\s+(o\s+|a\s+)?(hor[aá]rio|consulta|dia\s+da\s+consulta)|trocar\s+(o\s+|a\s+)?(hor[aá]rio|consulta)|cancelar\s+(a\s+|minha\s+)?consulta|adiar\s+(a\s+|minha\s+)?consulta|n[ãa]o\s+vou\s+(poder|conseguir)\s+(ir|comparecer|na\s+consulta)|pode\s+(ser\s+)?(em\s+)?outro\s+dia|pode\s+(ser\s+)?(em\s+)?outro\s+hor[aá]rio|tem\s+outro\s+hor[aá]rio\s+disponivel)/.test(ultimasDuas);
       const eRemarcacao = remarcacaoExplicita;
 
       if (agendamentoExistente && !eRemarcacao) {
@@ -618,15 +671,12 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         }
       }
       try {
-        // Buscar slot usando a RESPOSTA DA LAURA (que tem o horário confirmado)
-        // e o texto do lead como fallback
-        let slot = await calendar.encontrarSlot(reply, phone) || await calendar.encontrarSlot(combinedText, phone);
-        // Fallback: se encontrarSlot falhou (slot fora da lista viva, race condition,
-        // Laura usou hora fora das 3 oferecidas), construir slot direto do texto da
-        // confirmacao. criarConsulta faz checagem de conflito no slot exato, entao
-        // nao ha risco de double-booking.
+        // Buscar slot APENAS na resposta da Laura (que contém o horário confirmado).
+        // Nunca ler o texto do lead — evita capturar datas/horas mencionadas em outro
+        // contexto (ex: "fui demitido 15/03 às 14h" virar agendamento).
+        let slot = await calendar.encontrarSlot(reply, phone);
         if (!slot) {
-          slot = calendar.construirSlotDeTexto(reply) || calendar.construirSlotDeTexto(combinedText);
+          slot = calendar.construirSlotDeTexto(reply);
           if (slot) {
             console.log(`[CALENDAR-NPL] Fallback acionado para ${phone}: slot construido de "${reply.slice(0, 80)}"`);
           }
@@ -892,11 +942,19 @@ async function checkFollowUps() {
         if (hoursAgo < 2) continue;
       }
 
-      let followUpCount = 0;
-      for (const m of lastMsgs) {
-        if (m.role === 'assistant') followUpCount++;
-        else break;
-      }
+      // Contar quais follow-ups JÁ foram enviados (via eventos em metricas).
+      // Evita contar mensagens programáticas (apresentação, credibilidade, resposta IA)
+      // como follow-ups — isso pulava os de 2h/4h e ia direto pro 24h.
+      const { data: followupsEnviados } = await db.supabase
+        .from('metricas')
+        .select('evento')
+        .eq('conversa_id', conv.id)
+        .in('evento', ['followup_2h', 'followup_4h', 'followup_24h', 'followup_72h']);
+      const eventosEnviados = new Set((followupsEnviados || []).map(e => e.evento));
+      const jaEnviou2h = eventosEnviados.has('followup_2h');
+      const jaEnviou4h = eventosEnviados.has('followup_4h');
+      const jaEnviou24h = eventosEnviados.has('followup_24h');
+      const jaEnviou72h = eventosEnviados.has('followup_72h');
 
       const nome = conv.leads?.nome || 'amigo(a)';
 
@@ -936,7 +994,7 @@ async function checkFollowUps() {
       }
 
       // 1o FOLLOW-UP: 2h sem resposta
-      if (followUpCount === 1 && hoursAgo >= 2 && hoursAgo < 4) {
+      if (!jaEnviou2h && hoursAgo >= 2 && hoursAgo < 6) {
         const fixo = `${nome}, tudo bem? Ficou com alguma duvida sobre os seus direitos trabalhistas? Estou aqui para te ajudar.`;
         const msg = await getSmartMsg(fixo, 1);
         console.log(`[FOLLOWUP-NPL-2h] ${conv.telefone} (${nome})`);
@@ -945,7 +1003,7 @@ async function checkFollowUps() {
       }
 
       // 2o FOLLOW-UP: 4h sem resposta
-      if (followUpCount === 2 && hoursAgo >= 4 && hoursAgo < 20) {
+      if (jaEnviou2h && !jaEnviou4h && hoursAgo >= 4 && hoursAgo < 22) {
         const fixo = `${nome}, aqui e a Laura do escritorio NPLADVS. Passando para saber se posso te ajudar com a sua situacao trabalhista. Temos horarios disponiveis essa semana e a consulta inicial e sem compromisso.`;
         const msg = await getSmartMsg(fixo, 2);
         console.log(`[FOLLOWUP-NPL-4h] ${conv.telefone} (${nome})`);
@@ -954,7 +1012,7 @@ async function checkFollowUps() {
       }
 
       // 3o FOLLOW-UP: 24h
-      if (followUpCount === 3 && hoursAgo >= 24 && hoursAgo < 48) {
+      if (jaEnviou4h && !jaEnviou24h && hoursAgo >= 24 && hoursAgo < 56) {
         const fixo = `${nome}, so lembrando que existe um prazo de 2 anos apos sair da empresa para buscar seus direitos trabalhistas. O escritorio NPLADVS pode avaliar o seu caso sem compromisso. Me avisa se tiver interesse.`;
         const msg = await getSmartMsg(fixo, 3);
         console.log(`[FOLLOWUP-NPL-24h] ${conv.telefone} (${nome})`);
@@ -963,7 +1021,7 @@ async function checkFollowUps() {
       }
 
       // 4o FOLLOW-UP: 72h
-      if (followUpCount === 4 && hoursAgo >= 48 && hoursAgo < 96) {
+      if (jaEnviou24h && !jaEnviou72h && hoursAgo >= 48 && hoursAgo < 120) {
         const fixo = `${nome}, tudo bem? Aqui e a Laura do escritorio NPLADVS. Essa e a minha ultima mensagem sobre o assunto, nao quero te incomodar. Caso mude de ideia, estamos a disposicao para avaliar os seus direitos. Te desejo tudo de bom.`;
         const msg = await getSmartMsg(fixo, 4);
         console.log(`[FOLLOWUP-NPL-72h] ${conv.telefone} (${nome})`);
@@ -1013,14 +1071,37 @@ setTimeout(() => checkFollowUps(), 60 * 1000);
 // ===== LEMBRETES DE CONSULTA =====
 // Envia mensagens em múltiplos pontos: 48h (documentos), 24h (confirmação),
 // 08h do dia (matinal), 1h (lembrete), 30min (lembrete final), +2h (no-show).
-// Map chave → timestamp de envio, para dedupe persistente entre dias.
-const lembretesEnviados = new Map();
+// Dedupe de lembretes persistido em metricas (sobrevive a deploy).
+// Cache em memória é só otimização — source of truth é o banco.
+const lembretesCache = new Map();
 
-function jaEnviado(chave) {
-  return lembretesEnviados.has(chave);
+async function jaEnviado(chave) {
+  if (lembretesCache.has(chave)) return true;
+  try {
+    const { data } = await db.supabase
+      .from('metricas')
+      .select('id')
+      .eq('evento', `lembrete_${chave}`)
+      .limit(1);
+    if (data && data.length > 0) {
+      lembretesCache.set(chave, Date.now());
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
-function marcarEnviado(chave) {
-  lembretesEnviados.set(chave, Date.now());
+async function marcarEnviado(chave) {
+  lembretesCache.set(chave, Date.now());
+  try {
+    await db.supabase.from('metricas').insert({
+      evento: `lembrete_${chave}`,
+      detalhes: chave,
+      escritorio: config.ESCRITORIO,
+      criado_em: new Date().toISOString()
+    });
+  } catch (e) {
+    console.log('[LEMBRETE-NPL] Erro ao persistir dedup:', e.message);
+  }
 }
 
 async function checkLembretesConsulta() {
@@ -1053,8 +1134,8 @@ async function checkLembretesConsulta() {
 
       // ===== 48h antes: cobrança de documentos =====
       const chaveDocs = `cobrancaDocs_${consulta.id}`;
-      if (minFaltando >= 46 * 60 && minFaltando <= 50 * 60 && !jaEnviado(chaveDocs)) {
-        marcarEnviado(chaveDocs);
+      if (minFaltando >= 46 * 60 && minFaltando <= 50 * 60 && !(await jaEnviado(chaveDocs))) {
+        await marcarEnviado(chaveDocs);
         try {
           const msg = `Oi, ${consulta.nome}! Aqui é a Laura do NPLADVS. ` +
             `Sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora} está chegando (${consulta.inicioFormatado}).\n\n` +
@@ -1073,8 +1154,8 @@ async function checkLembretesConsulta() {
 
       // ===== 24h antes: confirmação =====
       const chaveConfirm = `confirmacao24h_${consulta.id}`;
-      if (minFaltando >= 22 * 60 && minFaltando <= 26 * 60 && !jaEnviado(chaveConfirm)) {
-        marcarEnviado(chaveConfirm);
+      if (minFaltando >= 22 * 60 && minFaltando <= 26 * 60 && !(await jaEnviado(chaveConfirm))) {
+        await marcarEnviado(chaveConfirm);
         try {
           const msg = `${consulta.nome}, passando para confirmar sua consulta trabalhista de amanhã ` +
             `às ${consulta.inicioFormatado} com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
@@ -1090,8 +1171,8 @@ async function checkLembretesConsulta() {
       // ===== Matinal 08h: áudio/texto do dia =====
       const chaveMatinal = `matinal_${consulta.id}`;
       const ehHoje = minFaltando > 0 && minFaltando <= 24 * 60;
-      if (ehHoje && horaAtual === 8 && minAtual < 15 && !jaEnviado(chaveMatinal)) {
-        marcarEnviado(chaveMatinal);
+      if (ehHoje && horaAtual === 8 && minAtual < 15 && !(await jaEnviado(chaveMatinal))) {
+        await marcarEnviado(chaveMatinal);
         try {
           const msgTexto = `Bom dia, ${consulta.nome}! Aqui é a Laura do escritório NPLADVS. ` +
             `Passando para lembrar que hoje você tem consulta trabalhista às ${consulta.inicioFormatado} ` +
@@ -1106,8 +1187,8 @@ async function checkLembretesConsulta() {
 
       // ===== 1h antes: lembrete =====
       const chave1h = `lembrete1h_${consulta.id}`;
-      if (minFaltando > 45 && minFaltando <= 75 && !jaEnviado(chave1h)) {
-        marcarEnviado(chave1h);
+      if (minFaltando > 45 && minFaltando <= 75 && !(await jaEnviado(chave1h))) {
+        await marcarEnviado(chave1h);
         try {
           const msg = `${consulta.nome}, faltando 1h para sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
             `Separe um lugar tranquilo e, se tiver, os documentos (CTPS, holerites, contrato, prints). ` +
@@ -1121,8 +1202,8 @@ async function checkLembretesConsulta() {
 
       // ===== 30min antes: lembrete final (existente) =====
       const chave30min = `lembrete30min_${consulta.id}`;
-      if (minFaltando > 0 && minFaltando <= 35 && !jaEnviado(chave30min)) {
-        marcarEnviado(chave30min);
+      if (minFaltando > 0 && minFaltando <= 35 && !(await jaEnviado(chave30min))) {
+        await marcarEnviado(chave30min);
         try {
           const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora} ` +
             `comeca em 30 minutos!\n\n` +
@@ -1139,21 +1220,35 @@ async function checkLembretesConsulta() {
       // Se lead ainda está na etapa 'agendamento' (não avançou para documentos/cliente),
       // assume que a consulta não rendeu — manda mensagem de retomada.
       const chaveNoShow = `noshow_${consulta.id}`;
-      if (minFaltando <= -120 && minFaltando >= -180 && !jaEnviado(chaveNoShow)) {
+      if (minFaltando <= -120 && minFaltando >= -180 && !(await jaEnviado(chaveNoShow))) {
         try {
           const lead = await db.getLeadByPhone(consulta.telefone);
-          // Só dispara se ainda está em 'agendamento' — se já virou documentos/cliente,
-          // a consulta teve desfecho e a advogada está com o lead.
+          // Só dispara se: (a) ainda está em 'agendamento' E (b) lead não respondeu
+          // nada depois do horário da consulta. Senão manda "não consegui confirmar"
+          // pra quem já conversou — desnecessário e causa ruído.
           if (lead && lead.etapa_funil === 'agendamento') {
-            marcarEnviado(chaveNoShow);
-            const msg = `Oi, ${consulta.nome}! Aqui é a Laura. Não consegui confirmar se sua consulta de hoje rolou. ` +
-              `Deu algum imprevisto? Se precisar, consigo reagendar com ${tituloPessoa} ${consulta.colaboradora} ` +
-              `em outro horário — é só me dizer o melhor dia pra você.`;
-            await whatsapp.sendText(consulta.telefone, msg);
-            console.log(`[LEMBRETE-NPL] Re-engajamento no-show para ${consulta.nome}`);
+            const { data: msgsAposConsulta } = await db.supabase
+              .from('mensagens')
+              .select('id')
+              .eq('conversa_id', lead.conversa_id || '')
+              .eq('role', 'user')
+              .gte('criado_em', new Date(consulta.inicio.getTime()).toISOString())
+              .limit(1);
+            const leadRespondeu = msgsAposConsulta && msgsAposConsulta.length > 0;
+
+            if (!leadRespondeu) {
+              await marcarEnviado(chaveNoShow);
+              const msg = `Oi, ${consulta.nome}! Aqui é a Laura. Não consegui confirmar se sua consulta de hoje rolou. ` +
+                `Deu algum imprevisto? Se precisar, consigo reagendar com ${tituloPessoa} ${consulta.colaboradora} ` +
+                `em outro horário — é só me dizer o melhor dia pra você.`;
+              await whatsapp.sendText(consulta.telefone, msg);
+              console.log(`[LEMBRETE-NPL] Re-engajamento no-show para ${consulta.nome}`);
+            } else {
+              await marcarEnviado(chaveNoShow);
+              console.log(`[LEMBRETE-NPL] No-show skipped — lead ja respondeu (${consulta.nome})`);
+            }
           } else {
-            // Marca como "processado" para não checar de novo, mesmo sem enviar.
-            marcarEnviado(chaveNoShow);
+            await marcarEnviado(chaveNoShow);
           }
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro no-show ${consulta.nome}:`, e.message);
@@ -1176,17 +1271,17 @@ setInterval(() => {
 // Primeira verificação 2min após boot
 setTimeout(() => checkLembretesConsulta(), 2 * 60 * 1000);
 
-// Limpar chaves de lembrete antigas (> 7 dias) para evitar crescimento indefinido do Map
+// Limpar cache de lembrete antigo (> 7 dias) — source of truth fica no banco
 setInterval(() => {
   const corte = Date.now() - 7 * 24 * 60 * 60 * 1000;
   let removidas = 0;
-  for (const [chave, ts] of lembretesEnviados) {
+  for (const [chave, ts] of lembretesCache) {
     if (ts < corte) {
-      lembretesEnviados.delete(chave);
+      lembretesCache.delete(chave);
       removidas++;
     }
   }
-  if (removidas > 0) console.log(`[LEMBRETE-NPL] Limpeza: ${removidas} chave(s) antiga(s) removida(s)`);
+  if (removidas > 0) console.log(`[LEMBRETE-NPL] Cache limpou ${removidas} chave(s) antiga(s)`);
 }, 60 * 60 * 1000);
 
 // ===== WEBHOOK Z-API — ESCRITÓRIO (só salva, sem IA) =====
@@ -1397,10 +1492,10 @@ app.post('/webhook/zapi', async (req, res) => {
         return res.json({ status: 'bot_sent' });
       }
 
-      if (messageId && processedMessages.has(messageId)) {
+      if (processedMessagesHas(messageId)) {
         return res.json({ status: 'duplicate' });
       }
-      if (messageId) processedMessages.add(messageId);
+      processedMessagesAdd(messageId);
 
       pauseAI(phone, 30);
       console.log(`[MANUAL-NPL] Atendente respondeu para ${phone} - IA pausada 30min`);
@@ -1439,10 +1534,10 @@ app.post('/webhook/zapi', async (req, res) => {
 
     if (!isMessage) return res.json({ status: 'ignored' });
 
-    if (messageId && processedMessages.has(messageId)) {
+    if (processedMessagesHas(messageId)) {
       return res.json({ status: 'duplicate' });
     }
-    if (messageId) processedMessages.add(messageId);
+    processedMessagesAdd(messageId);
 
     const phone = body.phone || body.from?.replace('@c.us', '') || '';
     let text = body.text?.message || body.body || '';
@@ -2743,16 +2838,22 @@ async function syncDatacrazy() {
 
       for (const msg of novas) {
         const msgTime = new Date(msg.createdAt);
+        // Dedup robusto: janela ampliada pra 3min (cobre atrasos de propagação
+        // Supabase entre webhook fromMe e este polling). Checa content exato E
+        // prefix de 50 chars (cobre caso de texto truncado em algum caminho).
+        const contentPrefix = msg.body.slice(0, 50);
         const { data: dup } = await db.supabase
           .from('mensagens')
-          .select('id')
+          .select('id, content')
           .eq('conversa_id', conversa.id)
-          .eq('content', msg.body)
-          .gte('criado_em', new Date(msgTime.getTime() - 60000).toISOString())
-          .lte('criado_em', new Date(msgTime.getTime() + 60000).toISOString())
-          .limit(1);
+          .gte('criado_em', new Date(msgTime.getTime() - 180000).toISOString())
+          .lte('criado_em', new Date(msgTime.getTime() + 180000).toISOString())
+          .limit(10);
 
-        if (dup && dup.length > 0) continue;
+        const duplicada = (dup || []).some(d =>
+          d.content === msg.body || (d.content && d.content.startsWith(contentPrefix))
+        );
+        if (duplicada) continue;
 
         const attendantName = msg.attendant?.name || 'Equipe (Datacrazy)';
         await db.saveMessage(conversa.id, 'assistant', msg.body, {

@@ -164,13 +164,18 @@ async function extractAndUpdateLead(leadId, text) {
       /(?:^|\n)\s*([A-ZÀ-Ú][a-zà-ú]+(?: (?:de |da |do |dos |das )?[A-ZÀ-Ú][a-zà-ú]+){1,4})\s*(?:\n|$)/m,
       /(?:^|\n)\s*([A-ZÀ-Ú][a-zà-ú]{2,15})\s*(?:\n|$)/m
     ];
-    const palavrasComuns = /^(sim|nao|não|oi|ola|olá|bom|boa|ok|obrigad|tudo|bem|dia|noite|tarde|quero|tenho|preciso|pode|certo|isso|aqui|agora|trabalhei|trabalho|meu|minha|fui|era|estou|estive)$/i;
+    const palavrasComuns = /^(sim|nao|não|oi|ola|olá|bom|boa|ok|obrigad|tudo|bem|dia|noite|tarde|quero|tenho|preciso|pode|certo|isso|aqui|agora|trabalhei|trabalho|meu|minha|fui|era|estou|estive|muito|pouco|talvez|quase|sempre|nunca|prezada|prezado|doutor|doutora|senhor|senhora|bel|salve|oie|pessoal|galera|gente|atenciosamente|cordialmente|obrigada|desculpa|desculpe|entendi|entendo|claro|perfeito|beleza|blz|show)$/i;
+    // Lista de primeiros nomes suspeitos de serem verbos em forma conjugada
+    const verbosForma = /^(recebi|mandei|trouxe|vi|vou|vai|vem|faço|faz|fez|saiu|sai|entrei|peguei|teve|temos|disse|vim|viajei|cheguei|liguei|ganho|ganhei|perdi)$/i;
     for (const pattern of nomePatterns) {
       const match = text.match(pattern);
-      if (match && match[1].length >= 3 && match[1].length < 50 && !palavrasComuns.test(match[1].split(' ')[0])) {
-        updates.nome = match[1].trim();
-        break;
-      }
+      if (!match) continue;
+      const nomeCapturado = match[1].trim();
+      const primeiraPalavra = nomeCapturado.split(' ')[0];
+      if (nomeCapturado.length < 3 || nomeCapturado.length >= 50) continue;
+      if (palavrasComuns.test(primeiraPalavra) || verbosForma.test(primeiraPalavra)) continue;
+      updates.nome = nomeCapturado;
+      break;
     }
   }
 

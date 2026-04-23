@@ -100,15 +100,10 @@ function determinarColaboradora(eventosExistentes, dataHoraSlot) {
     }
   }
 
-  // Retornar a que tem menos consultas agendadas
-  let menor = Infinity;
-  let escolhida = candidatas[0];
-  for (const c of candidatas) {
-    if (contagem[c] < menor) {
-      menor = contagem[c];
-      escolhida = c;
-    }
-  }
+  // Retornar a que tem menos consultas — com desempate aleatório (antes enviesava pra Dra. Luma)
+  const menor = Math.min(...Object.values(contagem));
+  const empatadas = candidatas.filter(c => contagem[c] === menor);
+  const escolhida = empatadas[Math.floor(Math.random() * empatadas.length)];
 
   console.log(`[CALENDAR-NPL] Rodízio: ${JSON.stringify(contagem)} -> ${escolhida}${dataHoraSlot && !luizaDisponivel(dataHoraSlot) ? ' (Luiza indisponível)' : ''}`);
   return escolhida;
@@ -454,8 +449,11 @@ async function criarConsulta(nome, telefone, email, dataHora, formato = 'online'
         singleEvents: true,
         timeZone: TIMEZONE
       });
+      // Considera QUALQUER evento não-cancelado como conflito. Antes o filtro
+      // "Consulta Trabalhista" permitia double-book com bloqueios manuais da
+      // advogada (férias, reunião interna, etc).
       const conflitos = (conflictResp.data.items || []).filter(ev =>
-        (ev.summary || '').includes('Consulta Trabalhista')
+        ev.status !== 'cancelled'
       );
       if (conflitos.length > 0) {
         console.log(`[CALENDAR-NPL] CONFLITO no slot ${inicio.toISOString()} — abortando insert (${conflitos.length} evento(s) existente(s))`);
