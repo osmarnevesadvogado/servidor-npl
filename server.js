@@ -630,8 +630,9 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
     // Detectar confirmação NOVA — exige "Agendado!" no INÍCIO da resposta (frase de confirmação).
     // Sem isso, pegava referências tipo "não agendado ainda" ou "seria bom termos agendado".
-    const temConfirmacao = /^(ok|tudo)?,?\s*agendado\s*!/i.test(reply.trim()) ||
-      /\bagendado\s*!/i.test(reply);
+    // Exige "Agendado!" no início da resposta ou como frase principal.
+    // \b era muito permissivo — pegava "termos agendado!" em qualquer contexto.
+    const temConfirmacao = /^[^.!?]*agendado\s*!/im.test(reply);
     // Exige DIA e HORA na resposta (não apenas um dos dois)
     const temDia = /(segunda|terça|terca|quarta|quinta|sexta|amanhã|amanha|hoje|\d{1,2}\/\d{1,2}|dia\s+\d{1,2})/i.test(replyLower);
     const temHora = /(\d{1,2})\s*(?:h|hrs?|horas?)/i.test(replyLower) || /[àa]s\s+\d{1,2}/i.test(replyLower);
@@ -661,13 +662,19 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       } else {
       // Se é remarcação, cancelar consulta anterior
       if (eRemarcacao && agendamentoExistente) {
+        let cancelOk = false;
         try {
           const cancelado = await calendar.cancelarConsulta(phone);
           if (cancelado) {
+            cancelOk = true;
             console.log(`[CALENDAR-NPL] Remarcação: consulta anterior cancelada (${cancelado.summary})`);
           }
         } catch (e) {
           console.log('[CALENDAR-NPL] Erro ao cancelar consulta anterior:', e.message);
+        }
+        if (!cancelOk) {
+          notificarFalhaAgendamento(lead?.nome || phone, phone,
+            'tentou remarcar mas nao conseguiu cancelar a consulta anterior. Verificar manualmente no Calendar se ha duplicata.');
         }
       }
       try {
@@ -676,7 +683,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         // contexto (ex: "fui demitido 15/03 às 14h" virar agendamento).
         let slot = await calendar.encontrarSlot(reply, phone);
         if (!slot) {
-          slot = calendar.construirSlotDeTexto(reply);
+          slot = await calendar.construirSlotDeTexto(reply);
           if (slot) {
             console.log(`[CALENDAR-NPL] Fallback acionado para ${phone}: slot construido de "${reply.slice(0, 80)}"`);
           }
@@ -1145,7 +1152,7 @@ async function checkLembretesConsulta() {
             `- Contrato de trabalho (se tiver)\n` +
             `- Qualquer prova do caso (mensagens, fotos, e-mails)\n\n` +
             `Pode mandar por aqui mesmo, se preferir. Qualquer dúvida me chama!`;
-          await whatsapp.sendText(consulta.telefone, msg);
+          await whatsapp.sendText(consulta.telefone, msg, consulta.origem || 'escritorio');
           console.log(`[LEMBRETE-NPL] Cobrança de documentos (48h) para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro cobrança docs ${consulta.nome}:`, e.message);
@@ -1161,7 +1168,7 @@ async function checkLembretesConsulta() {
             `às ${consulta.inicioFormatado} com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
             `Vai conseguir comparecer? Se precisar remarcar, me avisa por aqui que eu ajeito.\n\n` +
             `Estamos te aguardando!`;
-          await whatsapp.sendText(consulta.telefone, msg);
+          await whatsapp.sendText(consulta.telefone, msg, consulta.origem || 'escritorio');
           console.log(`[LEMBRETE-NPL] Confirmação 24h para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro confirmação 24h ${consulta.nome}:`, e.message);
@@ -1178,7 +1185,7 @@ async function checkLembretesConsulta() {
             `Passando para lembrar que hoje você tem consulta trabalhista às ${consulta.inicioFormatado} ` +
             `com ${tituloPessoa} ${consulta.colaboradora}. A consulta será online. ` +
             `Nos vemos mais tarde!`;
-          await whatsapp.sendText(consulta.telefone, msgTexto);
+          await whatsapp.sendText(consulta.telefone, msgTexto, consulta.origem || 'escritorio');
           console.log(`[LEMBRETE-NPL] Lembrete matinal (08h) para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro lembrete matinal ${consulta.nome}:`, e.message);
@@ -1193,7 +1200,7 @@ async function checkLembretesConsulta() {
           const msg = `${consulta.nome}, faltando 1h para sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora}.\n\n` +
             `Separe um lugar tranquilo e, se tiver, os documentos (CTPS, holerites, contrato, prints). ` +
             `O link da reunião chega por aqui antes do horário.`;
-          await whatsapp.sendText(consulta.telefone, msg);
+          await whatsapp.sendText(consulta.telefone, msg, consulta.origem || 'escritorio');
           console.log(`[LEMBRETE-NPL] Lembrete 1h enviado para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro lembrete 1h ${consulta.nome}:`, e.message);
@@ -1209,7 +1216,7 @@ async function checkLembretesConsulta() {
             `comeca em 30 minutos!\n\n` +
             `O link para a reuniao online sera enviado em instantes.\n\n` +
             `Escritorio NPLADVS - Estamos te aguardando!`;
-          await whatsapp.sendText(consulta.telefone, msgLembrete);
+          await whatsapp.sendText(consulta.telefone, msgLembrete, consulta.origem || 'escritorio');
           console.log(`[LEMBRETE-NPL] Lembrete 30min enviado para ${consulta.nome}`);
         } catch (e) {
           console.log(`[LEMBRETE-NPL] Erro lembrete 30min ${consulta.nome}:`, e.message);
@@ -1227,10 +1234,12 @@ async function checkLembretesConsulta() {
           // nada depois do horário da consulta. Senão manda "não consegui confirmar"
           // pra quem já conversou — desnecessário e causa ruído.
           if (lead && lead.etapa_funil === 'agendamento') {
+            // Buscar conversa PELO TELEFONE (lead não tem conversa_id)
+            const convDoLead = await db.getOrCreateConversa(consulta.telefone);
             const { data: msgsAposConsulta } = await db.supabase
               .from('mensagens')
               .select('id')
-              .eq('conversa_id', lead.conversa_id || '')
+              .eq('conversa_id', convDoLead.id)
               .eq('role', 'user')
               .gte('criado_em', new Date(consulta.inicio.getTime()).toISOString())
               .limit(1);
@@ -1241,7 +1250,7 @@ async function checkLembretesConsulta() {
               const msg = `Oi, ${consulta.nome}! Aqui é a Laura. Não consegui confirmar se sua consulta de hoje rolou. ` +
                 `Deu algum imprevisto? Se precisar, consigo reagendar com ${tituloPessoa} ${consulta.colaboradora} ` +
                 `em outro horário — é só me dizer o melhor dia pra você.`;
-              await whatsapp.sendText(consulta.telefone, msg);
+              await whatsapp.sendText(consulta.telefone, msg, consulta.origem || 'escritorio');
               console.log(`[LEMBRETE-NPL] Re-engajamento no-show para ${consulta.nome}`);
             } else {
               await marcarEnviado(chaveNoShow);

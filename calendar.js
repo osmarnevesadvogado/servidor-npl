@@ -176,7 +176,7 @@ function reservarSlot(slotInicio, phone) {
     phone,
     expira: Date.now() + RESERVA_DURACAO
   });
-  console.log(`[CALENDAR-NPL] Slot reservado: ${key} para ${phone} (10min)`);
+  console.log(`[CALENDAR-NPL] Slot reservado: ${key} para ${phone} (20min)`);
 }
 
 function isSlotReservado(slotInicio, phoneAtual) {
@@ -265,6 +265,15 @@ async function getHorariosDisponiveis(diasParaFrente = 5, phoneAtual = null) {
 
     // Buscar dias úteis (excluindo fds e feriados)
     const diasUteis = [];
+    // Buscar dias não úteis (enforcados, férias, feriados adicionais) do banco
+    let diasNaoUteis = [];
+    try {
+      const whatsapp = require('./whatsapp');
+      if (whatsapp.getDiasNaoUteis) {
+        diasNaoUteis = await whatsapp.getDiasNaoUteis();
+      }
+    } catch (e) {}
+
     let tempDate = new Date(Date.UTC(inicioAno, inicioMes, inicioDia));
 
     while (diasUteis.length < diasParaFrente) {
@@ -272,8 +281,9 @@ async function getHorariosDisponiveis(diasParaFrente = 5, phoneAtual = null) {
       const ano = tempDate.getUTCFullYear();
       const mes = tempDate.getUTCMonth();
       const dia = tempDate.getUTCDate();
+      const dateStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
 
-      if (diaSemana !== 0 && diaSemana !== 6 && !isFeriado(ano, mes, dia)) {
+      if (diaSemana !== 0 && diaSemana !== 6 && !isFeriado(ano, mes, dia) && !diasNaoUteis.includes(dateStr)) {
         diasUteis.push({ ano, mes, dia, diaSemana });
       }
       tempDate.setUTCDate(tempDate.getUTCDate() + 1);
@@ -339,9 +349,11 @@ async function getHorariosDisponiveis(diasParaFrente = 5, phoneAtual = null) {
 
     console.log(`[CALENDAR-NPL] ${slots.length} slots disponíveis`);
 
-    // Salvar no cache (5 minutos)
-    horariosCache = slots;
-    horariosCacheExpires = Date.now() + 5 * 60 * 1000;
+    // Salvar no cache (5 minutos) — SÓ quando sem phoneAtual pra não contaminar
+    if (!phoneAtual) {
+      horariosCache = slots;
+      horariosCacheExpires = Date.now() + 5 * 60 * 1000;
+    }
 
     return slots;
   } catch (e) {
@@ -666,7 +678,7 @@ async function encontrarSlot(texto, phoneAtual = null) {
 // lag do Google Calendar, reserva de outra conversa, Laura gerando hora fora dos
 // 3 slots oferecidos). Se a Laura confirmou dia+hora especificos, confiamos e
 // deixamos o insert real no Google Calendar detectar conflito (checagem em criarConsulta).
-function construirSlotDeTexto(texto) {
+async function construirSlotDeTexto(texto) {
   if (!texto) return null;
   const lower = texto.toLowerCase();
 
@@ -735,8 +747,16 @@ function construirSlotDeTexto(texto) {
     return null;
   }
 
-  const inicio = criarDataBelem(dataExplicita.ano, dataExplicita.mes, dataExplicita.dia, hora, 0);
-  const fim = new Date(inicio.getTime() + DURACAO_CONSULTA * 60 * 1000);
+  let inicio = criarDataBelem(dataExplicita.ano, dataExplicita.mes, dataExplicita.dia, hora, 0);
+  let fim = new Date(inicio.getTime() + DURACAO_CONSULTA * 60 * 1000);
+
+  // Year rollover: se a data caiu no passado E o mês é anterior ao atual,
+  // provavelmente é referência ao próximo ano (ex: "02/01" em dezembro)
+  if (inicio <= new Date() && dataExplicita.mes < agoraBelem().getUTCMonth()) {
+    dataExplicita.ano++;
+    inicio = criarDataBelem(dataExplicita.ano, dataExplicita.mes, dataExplicita.dia, hora, 0);
+    fim = new Date(inicio.getTime() + DURACAO_CONSULTA * 60 * 1000);
+  }
 
   if (inicio <= new Date()) {
     console.log('[CALENDAR-NPL] construirSlotDeTexto: slot no passado');
@@ -754,6 +774,19 @@ function construirSlotDeTexto(texto) {
     console.log('[CALENDAR-NPL] construirSlotDeTexto: feriado');
     return null;
   }
+
+  // Verificar dias_nao_uteis (enforcados, férias da equipe)
+  try {
+    const whatsapp = require('./whatsapp');
+    if (whatsapp.getDiasNaoUteis) {
+      const diasNaoUteis = await whatsapp.getDiasNaoUteis();
+      const dateStr = `${dataExplicita.ano}-${String(dataExplicita.mes + 1).padStart(2, '0')}-${String(dataExplicita.dia).padStart(2, '0')}`;
+      if (diasNaoUteis.includes(dateStr)) {
+        console.log(`[CALENDAR-NPL] construirSlotDeTexto: dia nao util (${dateStr})`);
+        return null;
+      }
+    }
+  } catch (e) {}
 
   const label = formatarSlot(hora, {
     ano: dataExplicita.ano,
@@ -804,11 +837,15 @@ async function getConsultasDoDia() {
 
       const inicio = new Date(ev.start.dateTime || ev.start.date);
 
+      const origemMatch = descricao.match(/Origem:\s*(\w+)/);
+      const origem = origemMatch ? origemMatch[1] : 'escritorio';
+
       return {
         id: ev.id,
         nome,
         telefone,
         colaboradora,
+        origem,
         inicio,
         inicioFormatado: formatarSlotDate(inicio),
         summary: ev.summary
@@ -836,7 +873,7 @@ async function buscarConsultaPorTelefone(telefone) {
       singleEvents: true,
       orderBy: 'startTime',
       timeZone: TIMEZONE,
-      maxResults: 20
+      maxResults: 100
     });
 
     const eventos = response.data.items || [];
@@ -868,7 +905,7 @@ async function cancelarConsulta(telefone) {
       singleEvents: true,
       orderBy: 'startTime',
       timeZone: TIMEZONE,
-      maxResults: 20
+      maxResults: 100
     });
 
     const eventos = response.data.items || [];
@@ -923,7 +960,7 @@ async function getConsultas(diasFuturos = 30) {
       singleEvents: true,
       orderBy: 'startTime',
       timeZone: TIMEZONE,
-      maxResults: 200
+      maxResults: 1000
     });
 
     return (response.data.items || [])
