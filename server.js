@@ -520,23 +520,37 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       history.filter(m => m.role === 'assistant').length === 0 &&
       !primeiroContatoEnviado.has(cleanPhonePrimeiroContato);
 
-    // Primeiro contato: enviar apresentação + credibilidade ANTES da resposta da IA
+    // Primeiro contato: enviar 2 msgs e PARAR (Laura responde só quando lead responder)
     if (ehPrimeiroContato) {
       primeiroContatoEnviado.add(cleanPhonePrimeiroContato);
+
       const msgApresentacao =
         `Ola! Sou a Laura, assistente virtual (IA) do escritorio Neves Pinheiro Lins, especializado em direitos trabalhistas. ` +
         `Estou aqui pra entender o seu caso e, se fizer sentido, agendar uma consulta gratuita com um dos nossos advogados. ` +
         `Por ser IA, posso cometer erros — tudo que conversarmos aqui sera revisado e confirmado pelo advogado responsavel na consulta. ` +
-        `Eu nao cuido do caso, apenas faco o primeiro contato.`;
+        `Eu nao cuido do caso, apenas faco o primeiro contato.\n\n` +
+        `Qual o seu nome completo?`;
       await whatsapp.sendText(phone, msgApresentacao, instancia);
       await db.saveMessage(conversa.id, 'assistant', msgApresentacao);
 
       const msgCredibilidade =
-        `O escritorio Neves Pinheiro Lins ja ajudou centenas de trabalhadores de todo o pais, principalmente paraenses, a conquistar seus direitos. ` +
+        `Enquanto aguardo sua resposta, quero que voce conheca o nosso escritorio. ` +
+        `Ja ajudamos centenas de trabalhadores de todo o pais, principalmente paraenses, a conquistar seus direitos. ` +
         `Somos registrados na OAB com equipe especializada em direito do trabalho.\n\n` +
         `Conheca nosso escritorio e equipe: https://npladvogados.com.br`;
       await whatsapp.sendText(phone, msgCredibilidade, instancia);
       await db.saveMessage(conversa.id, 'assistant', msgCredibilidade);
+
+      // Rastrear primeiro contato e encerrar — Laura responde na próxima msg do lead
+      await db.trackEvent(conversa.id, lead?.id, 'primeiro_contato', senderName);
+      if (lead && lead.etapa_funil === 'novo') {
+        await db.updateLead(lead.id, { etapa_funil: 'contato' });
+      }
+      if (lead) {
+        db.calcularScore(lead.id, conversa.id).catch(() => {});
+      }
+      console.log(`[REPLY-NPL] Primeiro contato para ${phone} — 2 msgs enviadas, aguardando resposta`);
+      return;
     }
 
     // Tracking de prazo prescricional — se detecta urgência/prescrito, rastreia uma vez
