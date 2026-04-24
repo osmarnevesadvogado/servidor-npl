@@ -126,6 +126,7 @@ Quando lead vira **cliente** (botão "Salvar Cliente" no CRM → `PUT /api/leads
 - Na primeira interação como cliente, Laura vende o diferencial tecnológico:
   > "[nome], agora que você é cliente, quero te contar uma coisa especial. O NPLADVS é apaixonado por tecnologia e quer oferecer o melhor de IA — por isso o escritório me desenvolveu usando tecnologia de ponta do Claude AI. Posso ser sua assistente pessoal no dia a dia! Dúvidas, documentos, perguntas sobre processo. Por ser IA, posso errar — revise e tome suas decisões. Se quiser falar com advogado, é só avisar."
 - Cliente pode usar Laura como assistente pessoal: dúvidas trabalhistas, análise de documentos, cálculos, orientações sobre audiência
+- **Notas da equipe**: campo `notas` do lead aparece em destaque na ficha como "NOTA DA EQUIPE SOBRE ESTE CONTATO". Laura usa pra contextualizar respostas (ex: "acordo em execução" → Laura informa sem precisar acionar advogado)
 - Quando cliente pede advogado → Laura destaca conversa, pausa IA 2h, rastreia `cliente_pediu_advogado`
 - Aparece no card "Clientes NPL" do dashboard via `/api/clientes/destaque`
 
@@ -171,6 +172,8 @@ Quando lead vira **cliente** (botão "Salvar Cliente" no CRM → `PUT /api/leads
 - **Upgrade automático**: nome com mais palavras E mais longo sobrescreve o atual (ex: pushName "Leo" → "Leonardo Silva de Souza"). Edição manual no CRM fica protegida.
 - **Proteção**: não sobrescreve nomes editados manualmente no CRM
 - **Título da conversa**: sincroniza quando lead ganha nome real; atualiza se pushName muda
+- **Nomes minúsculos**: "glacielnunesdasilva" (tudo junto, sem maiúscula) agora é aceito como nome real (4+ letras consecutivas)
+- **Sync com tabela clientes**: quando nome muda via API, propaga para `leads.nome` + `conversas.titulo` + `clientes.nome_completo`
 - **Filtro de falsos positivos**: palavrasComuns + verbos conjugados rejeitados
 - **Horário comercial**: leads que chegam no horário comercial também têm nome extraído (antes ficavam como "WhatsApp")
 - **Default da conversa**: nova conversa nasce com título = telefone formatado (ex: "(91) 8630-9184"), nunca mais "WhatsApp" genérico
