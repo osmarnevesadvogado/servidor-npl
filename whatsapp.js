@@ -21,8 +21,9 @@ function limparNomeContato(nome) {
   // Remover emojis (manter texto)
   limpo = limpo.replace(/[\u{1F300}-\u{1FAF8}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{200D}\u{20E3}\u{E0020}-\u{E007F}\u{2700}-\u{27BF}\u{2300}-\u{23FF}#\*]/gu, '').trim();
   if (!limpo || limpo.length < 2) return '';
-  // Se é só números/pontos/underscores sem nome real, ignorar
-  if (/^[a-z0-9._]+$/i.test(limpo) && !/[A-ZÀ-Ú][a-zà-ú]{2,}/.test(limpo)) return '';
+  // Se é só números/pontos/underscores sem letras suficientes, ignorar.
+  // Mas aceita nomes longos tipo "glacielnunesdasilva" (>8 letras consecutivas = nome real)
+  if (/^[a-z0-9._]+$/i.test(limpo) && !/[a-zA-ZÀ-Úà-ú]{4,}/.test(limpo)) return '';
   // Palavras de cargo/empresa — extrair só o nome
   const palavrasNaoNome = /(time|equipe|setor|comercial|corporativo|tecnico|técnico|vendas|empresa|escritorio|escritório|sociedade|advogad)/i;
   if (!palavrasNaoNome.test(limpo)) return limpo;
