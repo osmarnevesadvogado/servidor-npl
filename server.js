@@ -614,6 +614,18 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       console.log('[ALUCINACAO-NPL] Erro na analise:', e.message);
     }
 
+    // Detectar plano B: Laura ofereceu falar com humano (desconforto/pedido)
+    // Quando a resposta contém "lista prioritária" ou "equipe vai te responder",
+    // significa que Laura ativou o plano B → pausar IA e rastrear
+    const ativouPlanoB = /(lista priorit[aá]ria|equipe.*vai te responder|advogado vai te responder|alguem.*vai te responder|algu[eé]m.*vai te responder|ja estou avisando a equipe|já estou avisando)/i.test(reply);
+    if (ativouPlanoB) {
+      console.log(`[PLANO-B-NPL] ${phone} — Laura detectou desconforto, encaminhando pra equipe`);
+      pauseAI(phone, 120);
+      try {
+        await db.trackEvent(conversa.id, lead?.id, 'pediu_humano', `Plano B (Laura detectou desconforto): ${reply.slice(0, 150)}`);
+      } catch (e) {}
+    }
+
     // Detectar loop de despedida: se últimas 2 respostas da Laura já foram
     // despedidas ("até mais", "tenha um otimo"...), pausar a IA automaticamente
     const ehDespedida = /(até mais|ate mais|tenha um (otimo|ótimo|excelente|bom)|boa sorte|te desejo|obrigada pela paciencia|obrigada pela paciência)/i.test(reply);
@@ -2369,6 +2381,65 @@ app.get('/api/analise/origens', requireApiKey, async (req, res) => {
 });
 
 // ===== LEADS (endpoints para o funil do CRM) =====
+
+// Lista leads aguardando atendimento humano (pediu_humano ou plano B)
+app.get('/api/leads/aguardando-humano', async (req, res) => {
+  try {
+    const dias = parseInt(req.query.dias) || 7;
+    const limite = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+
+    // Buscar eventos pediu_humano recentes
+    const { data: eventos } = await db.supabase
+      .from('metricas')
+      .select('conversa_id, lead_id, detalhes, criado_em')
+      .eq('evento', 'pediu_humano')
+      .eq('escritorio', config.ESCRITORIO)
+      .gte('criado_em', limite)
+      .order('criado_em', { ascending: false });
+
+    if (!eventos || eventos.length === 0) {
+      return res.json({ ok: true, total: 0, leads: [] });
+    }
+
+    // Buscar dados dos leads (dedup por lead_id)
+    const leadIds = [...new Set((eventos || []).map(e => e.lead_id).filter(Boolean))];
+    const leadsMap = {};
+    if (leadIds.length > 0) {
+      const { data: leads } = await db.supabase
+        .from('leads')
+        .select('id, nome, telefone, etapa_funil, tese_interesse')
+        .in('id', leadIds);
+      for (const l of (leads || [])) leadsMap[l.id] = l;
+    }
+
+    // Buscar se IA está pausada para cada lead
+    const resultado = [];
+    const vistos = new Set();
+    for (const ev of eventos) {
+      if (!ev.lead_id || vistos.has(ev.lead_id)) continue;
+      vistos.add(ev.lead_id);
+      const lead = leadsMap[ev.lead_id];
+      if (!lead) continue;
+
+      const iaPausada = isAIPaused(lead.telefone);
+      resultado.push({
+        lead_id: lead.id,
+        nome: lead.nome,
+        telefone: lead.telefone,
+        etapa_funil: lead.etapa_funil,
+        tese_interesse: lead.tese_interesse,
+        motivo: ev.detalhes,
+        solicitado_em: ev.criado_em,
+        ia_pausada: iaPausada
+      });
+    }
+
+    res.json({ ok: true, total: resultado.length, leads: resultado });
+  } catch (e) {
+    console.error('[AGUARDANDO-HUMANO] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao buscar leads aguardando humano' });
+  }
+});
 
 app.get('/api/leads', async (req, res) => {
   try {
