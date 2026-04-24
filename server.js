@@ -614,6 +614,18 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       console.log('[ALUCINACAO-NPL] Erro na analise:', e.message);
     }
 
+    // Cliente pediu advogado: rastrear como evento separado pra card do dashboard
+    if (lead && lead.etapa_funil === 'cliente') {
+      const clientePediuAdvogado = /(destaque|advogado.*responder|equipe.*responder|colocar.*destaque|conversa em destaque)/i.test(reply);
+      if (clientePediuAdvogado) {
+        console.log(`[CLIENTE-NPL] ${lead.nome || phone} pediu contato com advogado — destacando`);
+        pauseAI(phone, 120);
+        try {
+          await db.trackEvent(conversa.id, lead.id, 'cliente_pediu_advogado', `${lead.nome}: ${combinedText.slice(0, 100)}`);
+        } catch (e) {}
+      }
+    }
+
     // Detectar plano B: Laura ofereceu falar com humano (desconforto/pedido)
     // Quando a resposta contém "lista prioritária" ou "equipe vai te responder",
     // significa que Laura ativou o plano B → pausar IA e rastrear
@@ -2382,6 +2394,59 @@ app.get('/api/analise/origens', requireApiKey, async (req, res) => {
 
 // ===== LEADS (endpoints para o funil do CRM) =====
 
+// Lista CLIENTES que pediram contato com advogado (atendimento premium)
+app.get('/api/clientes/destaque', async (req, res) => {
+  try {
+    const dias = parseInt(req.query.dias) || 7;
+    const limite = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: eventos } = await db.supabase
+      .from('metricas')
+      .select('conversa_id, lead_id, detalhes, criado_em')
+      .eq('evento', 'cliente_pediu_advogado')
+      .eq('escritorio', config.ESCRITORIO)
+      .gte('criado_em', limite)
+      .order('criado_em', { ascending: false });
+
+    if (!eventos || eventos.length === 0) {
+      return res.json({ ok: true, total: 0, clientes: [] });
+    }
+
+    const leadIds = [...new Set(eventos.map(e => e.lead_id).filter(Boolean))];
+    const leadsMap = {};
+    if (leadIds.length > 0) {
+      const { data: leads } = await db.supabase
+        .from('leads')
+        .select('id, nome, telefone, etapa_funil, tese_interesse')
+        .in('id', leadIds);
+      for (const l of (leads || [])) leadsMap[l.id] = l;
+    }
+
+    const resultado = [];
+    const vistos = new Set();
+    for (const ev of eventos) {
+      if (!ev.lead_id || vistos.has(ev.lead_id)) continue;
+      vistos.add(ev.lead_id);
+      const lead = leadsMap[ev.lead_id];
+      if (!lead) continue;
+      resultado.push({
+        lead_id: lead.id,
+        nome: lead.nome,
+        telefone: lead.telefone,
+        tese_interesse: lead.tese_interesse,
+        motivo: ev.detalhes,
+        solicitado_em: ev.criado_em,
+        ia_pausada: isAIPaused(lead.telefone)
+      });
+    }
+
+    res.json({ ok: true, total: resultado.length, clientes: resultado });
+  } catch (e) {
+    console.error('[CLIENTES-DESTAQUE] Erro:', e.message);
+    res.status(500).json({ error: 'Erro ao buscar clientes em destaque' });
+  }
+});
+
 // Lista leads aguardando atendimento humano (pediu_humano ou plano B)
 app.get('/api/leads/aguardando-humano', async (req, res) => {
   try {
@@ -2498,6 +2563,33 @@ app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (r
         }
       } catch (e) {
         console.log('[LEADS] Erro ao sincronizar titulo:', e.message);
+      }
+    }
+
+    // Se virou CLIENTE, rastrear evento + enviar mensagem premium
+    if (updates.etapa_funil === 'cliente') {
+      try {
+        const lead = await db.supabase.from('leads').select('nome, telefone').eq('id', req.params.id).maybeSingle();
+        if (lead?.data?.telefone) {
+          const nome = lead.data.nome || 'cliente';
+          const tel = lead.data.telefone;
+          const conversa = await db.getOrCreateConversa(tel);
+          const usuario = req.body.usuario_nome || 'CRM';
+
+          await db.trackEvent(conversa.id, req.params.id, 'cliente_salvo', `Salvo por ${usuario}`);
+
+          const msgPremium =
+            `${nome}, seja muito bem-vindo(a) ao escritorio Neves Pinheiro Lins! ` +
+            `A partir de agora voce tem atendimento prioritario conosco. ` +
+            `Eu continuo aqui pra te ajudar no que precisar, mas se em qualquer momento voce quiser falar diretamente com seu advogado, ` +
+            `e so me avisar que coloco sua conversa em destaque e a equipe te responde o mais rapido possivel.\n\n` +
+            `Estamos juntos, ${nome}!`;
+          await whatsapp.sendText(tel, msgPremium);
+          await db.saveMessage(conversa.id, 'assistant', msgPremium);
+          console.log(`[CLIENTE-NPL] ${nome} salvo como cliente por ${usuario} — msg premium enviada`);
+        }
+      } catch (e) {
+        console.log('[CLIENTE-NPL] Erro ao processar novo cliente:', e.message);
       }
     }
 
