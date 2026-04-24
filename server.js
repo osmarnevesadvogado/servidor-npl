@@ -1547,7 +1547,7 @@ app.post('/webhook/zapi', async (req, res) => {
             .select('id')
             .eq('conversa_id', conversa.id)
             .eq('content', text)
-            .gte('criado_em', new Date(Date.now() - 120000).toISOString())
+            .gte('criado_em', new Date(Date.now() - 300000).toISOString())
             .limit(1);
 
           if (recente && recente.length > 0) {
