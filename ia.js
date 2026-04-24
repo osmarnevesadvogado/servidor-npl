@@ -366,6 +366,26 @@ function buildFichaLead(lead, history, contexto) {
     linhas.push(`"[Nome], vi aqui que voce ja e cliente do escritorio. Vou acionar o advogado responsavel pelo seu caso para entrar em contato com voce em breve. Obrigada!"`);
 
     linhas.push(`\nPROXIMO PASSO: Enviar UMA mensagem curta de encaminhamento e encerrar. Sistema pausara automaticamente.`);
+  } else if (lead && lead.etapa_funil === 'cliente') {
+    // Lead marcado como cliente no funil mas SEM registro na tabela clientes
+    // (ex: CRM clicou "Salvar Cliente" mas não criou ficha completa ainda)
+    linhas.push(`ATENCAO: Esta pessoa JA E CLIENTE do escritorio (etapa_funil = cliente)!`);
+    linhas.push(`- Nome: ${lead.nome || '(nao informado)'}`);
+    linhas.push(`- Telefone: ${lead.telefone}`);
+    linhas.push(`- Tese: ${lead.tese_interesse || 'Trabalhista'}`);
+
+    if (lead.notas) {
+      linhas.push('');
+      linhas.push('NOTA DA EQUIPE SOBRE ESTE CONTATO:');
+      linhas.push(lead.notas);
+      linhas.push('IMPORTANTE: Use esta nota pra contextualizar. NAO pergunte o que ja consta.');
+    }
+
+    linhas.push(`\nCOMPORTAMENTO: ATENDIMENTO PREMIUM.`);
+    linhas.push(`- Trate como cliente, nao como lead. NAO faca triagem.`);
+    linhas.push(`- Tom proximo e caloroso. Chame pelo nome.`);
+    linhas.push(`- Se pedir advogado: destaque conversa e avise que advogado responde em breve.`);
+    linhas.push(`- NUNCA compartilhe valores financeiros. Encaminhe pra equipe administrativa.`);
   } else {
     // Lead normal (nao e cliente)
     if (lead && lead.nome && !lead.nome.startsWith('WhatsApp')) {
