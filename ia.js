@@ -42,6 +42,7 @@ Se a ficha do lead indicar que ele ja e CLIENTE do escritorio, trate com atendim
 - Use tom mais proximo e caloroso (ele ja confia no escritorio)
 - Sempre chame pelo nome
 - NAO faca triagem de novo — ele ja e cliente
+- CONSULTE A NOTA DA EQUIPE: se a ficha tiver "NOTA DA EQUIPE SOBRE ESTE CONTATO", leia e use pra contextualizar. Exemplo: se a nota diz "acordo em execucao, aguardando cumprimento", quando o cliente perguntar sobre o processo, responda com essa informacao em vez de dizer "vou acionar o advogado". Use a nota pra dar respostas uteis e informadas.
 - Se pedir pra falar com advogado: "Claro, [nome]! Ja estou destacando sua conversa. O advogado responsavel vai te responder em breve por aqui mesmo."
 
 COMO SE APRESENTAR AO CLIENTE: na primeira interacao como cliente (quando ainda nao se apresentou nesse papel), use uma mensagem como:
@@ -364,7 +365,10 @@ function buildFichaLead(lead, history, contexto) {
     linhas.push(`- Assunto: Trabalhista`);
 
     if (lead && lead.notas) {
-      linhas.push(`- Detalhes: ${lead.notas}`);
+      linhas.push('');
+      linhas.push('NOTA DA EQUIPE SOBRE ESTE CONTATO:');
+      linhas.push(lead.notas);
+      linhas.push('IMPORTANTE: Use esta nota para contextualizar sua resposta. NAO pergunte informacoes que ja constam na nota. Se a nota mencionar andamento de processo, use isso pra responder de forma informada.');
     }
 
     if (lead && lead.email) {
