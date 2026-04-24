@@ -525,13 +525,18 @@ async function findCasoByCliente(clienteId) {
 async function getContextoCompleto(phone) {
   const { cleanPhone } = require('./whatsapp');
   const tel = cleanPhone(phone);
+  if (!tel) return { tipo: 'lead', cliente: null, casos: [], tarefas: [], financeiro: [] };
 
-  const { data: cliente } = await supabase
+  // Buscar cliente por múltiplos formatos de telefone pra cobrir inconsistências
+  // O CRM pode salvar como "+55 91 99999-9999", "91999999999", "5591999999999"
+  const telSem55 = tel.startsWith('55') ? tel.slice(2) : tel;
+  const { data: clientes } = await supabase
     .from('clientes')
     .select('*')
-    .eq('telefone', tel)
-    .limit(1)
-    .single();
+    .or(`telefone.eq.${tel},telefone.eq.${telSem55},telefone.eq.+${tel}`)
+    .limit(1);
+
+  const cliente = clientes && clientes.length > 0 ? clientes[0] : null;
 
   if (!cliente) return { tipo: 'lead', cliente: null, casos: [], tarefas: [], financeiro: [] };
 
