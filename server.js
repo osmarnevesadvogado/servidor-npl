@@ -84,6 +84,7 @@ const messageBuffer = new Map();
 
 function bufferMessage(phone, text, senderName) {
   const cleanP = whatsapp.cleanPhone(phone);
+  if (!cleanP) return Promise.resolve(null);
   const existing = messageBuffer.get(cleanP);
 
   if (existing) {
@@ -175,8 +176,9 @@ setInterval(() => {
   // primeiroContatoEnviado cresce indefinidamente — limpa junto. Ok limpar a cada 10min
   // pois o propósito é só proteger contra race entre mensagens consecutivas (segundos).
   if (primeiroContatoEnviado.size > 1000) primeiroContatoEnviado.clear();
-  // jaNotificouHot também cresce indefinidamente — limpa após 1000 entradas
   if (jaNotificouHot.size > 1000) jaNotificouHot.clear();
+  // pendingClienteVerification: limitar a 500 entradas (leads que deram match com cliente mas nunca confirmaram)
+  if (pendingClienteVerification.size > 500) pendingClienteVerification.clear();
 }, 10 * 60 * 1000);
 
 // ===== CONTROLE DE NOTIFICAÇÃO DE LEAD QUENTE =====
@@ -1082,7 +1084,7 @@ async function checkFollowUps() {
       }
 
       // 4o FOLLOW-UP: 72h
-      if (jaEnviou24h && !jaEnviou72h && hoursAgo >= 48 && hoursAgo < 120) {
+      if (jaEnviou24h && !jaEnviou72h && hoursAgo >= 72 && hoursAgo < 120) {
         const fixo = `${nome}, tudo bem? Aqui e a Laura do escritorio NPLADVS. Essa e a minha ultima mensagem sobre o assunto, nao quero te incomodar. Caso mude de ideia, estamos a disposicao para avaliar os seus direitos. Te desejo tudo de bom.`;
         const msg = await getSmartMsg(fixo, 4);
         console.log(`[FOLLOWUP-NPL-72h] ${conv.telefone} (${nome})`);
@@ -1531,19 +1533,17 @@ app.post('/webhook/zapi', async (req, res) => {
             }
           }
 
-          const text = body.text?.message || body.body || '';
-          if (text) {
-            await db.saveMessage(conversa.id, 'user', text);
-            await db.extractAndUpdateLead(lead.id, text);
-          }
-
-          // Mídia (imagem, doc, áudio) — salvar mesmo sem IA
+          // Extrair texto e mídia (sem duplicar — salva UMA msg por webhook)
           const { text: mediaText, mediaUrl, mediaType } = extrairTextoEMidia(body);
-          if (mediaType && conversa) {
+          const textoPuro = body.text?.message || body.body || '';
+          const textoFinal = mediaType ? (mediaText || `[${mediaType}]`) : textoPuro;
+
+          if (textoFinal && conversa) {
             const extras = {};
             if (mediaUrl) extras.media_url = mediaUrl;
             if (mediaType) extras.media_type = mediaType;
-            await db.saveMessage(conversa.id, 'user', mediaText || `[${mediaType}]`, extras);
+            await db.saveMessage(conversa.id, 'user', textoFinal, extras);
+            if (!mediaType) await db.extractAndUpdateLead(lead.id, textoFinal);
           }
         } catch (e) {
           console.log('[ESCRITORIO-NPL] Erro:', e.message);
