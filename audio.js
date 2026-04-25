@@ -99,7 +99,8 @@ async function gerarAudioElevenLabs(texto) {
       const errText = await response.text();
       if (errText.includes('quota_exceeded')) {
         elevenlabsDesativada = true;
-        console.log('[AUDIO-NPL] ElevenLabs sem crédito — desativada até próximo deploy');
+        elevenlabsDesativadaEm = Date.now();
+        console.log('[AUDIO-NPL] ElevenLabs sem crédito — desativada por 24h');
       }
       throw new Error(`ElevenLabs ${response.status}: ${errText.slice(0, 200)}`);
     }
@@ -147,10 +148,17 @@ async function gerarAudioOpenAI(texto) {
 }
 
 // ===== GERAR ÁUDIO (tenta ElevenLabs, fallback OpenAI) =====
-let elevenlabsDesativada = false; // cache quando sem crédito
+let elevenlabsDesativada = false;
+let elevenlabsDesativadaEm = 0;
+const ELEVENLABS_RETRY_MS = 24 * 60 * 60 * 1000; // tenta de novo após 24h
 
 async function gerarAudio(texto) {
   // Só gera áudio com ElevenLabs (voz natural). Se sem crédito, não gera — sem fallback.
+  // Resetar flag após 24h (crédito pode ter sido reposto)
+  if (elevenlabsDesativada && Date.now() - elevenlabsDesativadaEm > ELEVENLABS_RETRY_MS) {
+    elevenlabsDesativada = false;
+    console.log('[AUDIO-NPL] ElevenLabs reativada (24h desde desativação)');
+  }
   if (config.ELEVENLABS_API_KEY && !elevenlabsDesativada) {
     const audio = await gerarAudioElevenLabs(texto);
     if (audio) return audio;
