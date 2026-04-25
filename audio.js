@@ -22,10 +22,29 @@ function getOpenAI() {
   return openaiClient;
 }
 
+function isUrlSegura(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (!['https:', 'http:'].includes(parsed.protocol)) return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return false;
+    if (host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('169.254.')) return false;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+    if (host.endsWith('.internal') || host.endsWith('.local')) return false;
+    return true;
+  } catch { return false; }
+}
+
 // ===== TRANSCREVER ÁUDIO (Whisper — OpenAI) =====
 async function transcreverAudio(audioUrl) {
   const client = getOpenAI();
   if (!client) return null;
+
+  if (!isUrlSegura(audioUrl)) {
+    console.log('[AUDIO-NPL] URL bloqueada (SSRF):', audioUrl?.slice(0, 50));
+    return null;
+  }
 
   let tempFile = null;
 
