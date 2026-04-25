@@ -35,7 +35,9 @@ app.use(express.json({ limit: '1mb' }));
 
 // Middleware de autenticação para endpoints da API
 function requireApiKey(req, res, next) {
-  if (!config.API_KEY) return next();
+  if (!config.API_KEY) {
+    return res.status(503).json({ error: 'API_KEY not configured' });
+  }
   const key = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
   if (key !== config.API_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -1818,7 +1820,7 @@ app.get('/api/test/claude', requireApiKey, async (req, res) => {
   }
 });
 
-app.get('/api/conversas', async (req, res) => {
+app.get('/api/conversas', requireApiKey, async (req, res) => {
   try {
     res.json(await db.listConversas());
   } catch (e) {
@@ -1826,7 +1828,7 @@ app.get('/api/conversas', async (req, res) => {
   }
 });
 
-app.get('/api/conversas/:id/mensagens', auditAccess('read', 'mensagens'), async (req, res) => {
+app.get('/api/conversas/:id/mensagens', requireApiKey, auditAccess('read', 'mensagens'), async (req, res) => {
   try {
     res.json(await db.getConversaMensagens(req.params.id));
   } catch (e) {
@@ -1872,7 +1874,7 @@ app.get('/api/pausar/status', (req, res) => {
 // ===== DIAS NÃO ÚTEIS (feriados municipais, enforcados, férias da equipe) =====
 
 // Listar dias não úteis futuros
-app.get('/api/dias-nao-uteis', async (req, res) => {
+app.get('/api/dias-nao-uteis', requireApiKey, async (req, res) => {
   try {
     const hoje = new Date().toISOString().slice(0, 10);
     const { data, error } = await db.supabase
@@ -1939,14 +1941,9 @@ app.delete('/api/dias-nao-uteis/:id', requireApiKey, async (req, res) => {
   }
 });
 
-// ===== RECUPERAR LEADS NO VÁCUO (versão GET para uso rápido no navegador) =====
-app.get('/api/recuperar-vacuo', async (req, res) => {
-  const key = req.query.key;
-  if (config.API_KEY && key !== config.API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized — use ?key=API_KEY' });
-  }
+// ===== RECUPERAR LEADS NO VÁCUO =====
+app.get('/api/recuperar-vacuo', requireApiKey, async (req, res) => {
   req.body = { desde: req.query.desde, instancia: req.query.instancia };
-  // Reusa a lógica do POST
   return handleRecuperarVacuo(req, res);
 });
 
@@ -2080,7 +2077,7 @@ app.post('/api/recuperar-vacuo', requireApiKey, async (req, res) => {
   }
 });
 
-app.get('/api/metricas', async (req, res) => {
+app.get('/api/metricas', requireApiKey, async (req, res) => {
   try {
     res.json(await db.getMetricas());
   } catch (e) {
@@ -2409,7 +2406,7 @@ app.get('/api/analise/origens', requireApiKey, async (req, res) => {
 // ===== LEADS (endpoints para o funil do CRM) =====
 
 // Lista CLIENTES que pediram contato com advogado (atendimento premium)
-app.get('/api/clientes/destaque', async (req, res) => {
+app.get('/api/clientes/destaque', requireApiKey, async (req, res) => {
   try {
     const dias = parseInt(req.query.dias) || 7;
     const limite = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
@@ -2462,7 +2459,7 @@ app.get('/api/clientes/destaque', async (req, res) => {
 });
 
 // Lista leads aguardando atendimento humano (pediu_humano ou plano B)
-app.get('/api/leads/aguardando-humano', async (req, res) => {
+app.get('/api/leads/aguardando-humano', requireApiKey, async (req, res) => {
   try {
     const dias = parseInt(req.query.dias) || 7;
     const limite = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
@@ -2520,7 +2517,7 @@ app.get('/api/leads/aguardando-humano', async (req, res) => {
   }
 });
 
-app.get('/api/leads', async (req, res) => {
+app.get('/api/leads', requireApiKey, async (req, res) => {
   try {
     const filtros = {};
     if (req.query.etapa) filtros.etapa = req.query.etapa;
@@ -2532,7 +2529,7 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-app.get('/api/leads/:id', auditAccess('read', 'lead'), async (req, res) => {
+app.get('/api/leads/:id', requireApiKey, auditAccess('read', 'lead'), async (req, res) => {
   try {
     const lead = await db.getLeadById(req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
@@ -2697,7 +2694,7 @@ app.post('/api/agendamentos/manual', requireApiKey, async (req, res) => {
 
 // ===== ANALYTICS DE CONVERSÃO =====
 // ===== AGENDAMENTOS (lista consultas do Google Calendar) =====
-app.get('/api/agendamentos', async (req, res) => {
+app.get('/api/agendamentos', requireApiKey, async (req, res) => {
   try {
     if (!calendar) return res.status(503).json({ error: 'Calendar não disponível' });
     const dias = parseInt(req.query.dias) || 30;
@@ -2709,7 +2706,7 @@ app.get('/api/agendamentos', async (req, res) => {
   }
 });
 
-app.get('/api/analytics', async (req, res) => {
+app.get('/api/analytics', requireApiKey, async (req, res) => {
   try {
     const dias = parseInt(req.query.dias) || 30;
     const analytics = await db.getAnalytics(dias);
@@ -2788,7 +2785,7 @@ app.post('/api/documentos/organizar', requireApiKey, async (req, res) => {
 });
 
 // Auditoria rápida (sem upload, só verifica o que tem)
-app.get('/api/documentos/auditoria/:phone', auditAccess('read', 'documentos'), async (req, res) => {
+app.get('/api/documentos/auditoria/:phone', requireApiKey, auditAccess('read', 'documentos'), async (req, res) => {
   try {
     if (!documentos) return res.status(503).json({ error: 'Módulo de documentos não disponível' });
 
@@ -2897,7 +2894,7 @@ app.post('/api/relatorio-semanal', requireApiKey, async (req, res) => {
   }
 });
 
-app.get('/api/relatorio-semanal', async (req, res) => {
+app.get('/api/relatorio-semanal', requireApiKey, async (req, res) => {
   try {
     const r = await db.getRelatorioSemanal();
     res.json(r);

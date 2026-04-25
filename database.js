@@ -6,6 +6,12 @@ const config = require('./config');
 
 const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_KEY);
 const ESC = config.ESCRITORIO; // 'npl'
+
+// Sanitiza string antes de interpolar em filtros PostgREST (.or, .ilike)
+function sanitizePostgrest(str) {
+  if (!str) return '';
+  return str.replace(/[,().%_\\*]/g, '').trim().slice(0, 100);
+}
 const INST = config.ZAPI_INSTANCE; // ID da instância Z-API (separa dados Laura/Ana)
 
 // Fallback: formata telefone BR como (DDD) XXXXX-XXXX
@@ -455,7 +461,7 @@ async function findClienteProcessoByName(nome) {
   const { data: parcial } = await supabase
     .from('npl_clientes_processos')
     .select('*')
-    .or(`nome_normalizado.ilike.%${palavraBusca}%`);
+    .ilike('nome_normalizado', `%${sanitizePostgrest(palavraBusca)}%`);
 
   if (!parcial || parcial.length === 0) {
     // Fallback: buscar por primeiro nome se a rara não achou nada
@@ -463,7 +469,7 @@ async function findClienteProcessoByName(nome) {
       const { data: fallback } = await supabase
         .from('npl_clientes_processos')
         .select('*')
-        .or(`nome_normalizado.ilike.${primeiro} %,nome_normalizado.ilike.% ${primeiro} %,nome_normalizado.ilike.% ${primeiro}`);
+        .ilike('nome_normalizado', `%${sanitizePostgrest(primeiro)}%`);
       if (fallback && fallback.length === 1) return fallback;
     }
     return null;
