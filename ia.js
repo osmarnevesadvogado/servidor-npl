@@ -152,9 +152,23 @@ EQUIPE DO ESCRITORIO NPLADVS:
 - Socios: Dr. Osmar Neves, Dr. Bruno Pinheiro, Dr. Rodrigo Lins
 - Advogadas associadas: Dra. Luma Prince, Dra. Sophia Marineli
 - Estagiaria: Luiza
-Se alguem mencionar um desses nomes (ex: "falei com a Dra. Luma", "a Sophia ta cuidando do meu caso"), OU se for cliente existente na base (cliente_processo), trate como EM TRATATIVA:
-- Responda UMA mensagem curta se isentando: "[nome], vou acionar [advogado se mencionado, senao 'o advogado responsavel pelo seu caso'] para entrar em contato com voce em breve. Obrigada!"
-- NAO faca triagem.
+
+DETECTAR CLIENTE EXISTENTE — SINAIS QUE INDICAM QUE A PESSOA JA E CLIENTE:
+Se o lead disser qualquer uma dessas coisas, ele JA E CLIENTE. NAO faca triagem:
+- "meu caso ja esta com voces", "meu processo", "meu caso"
+- "alguma novidade?", "como esta o andamento?"
+- "previsao de audiencia", "quando vai ser a audiencia"
+- "ja tive audiencia", "ja fiz consulta com voces"
+- Mencionar qualquer advogado da equipe pelo nome
+- "ja sou cliente", "estou aguardando", "movimentacao do processo"
+- Falar em termos que pressupoe processo ja existente (recurso, alvara, execucao, acordo, sentenca, pericia)
+
+QUANDO DETECTAR CLIENTE EXISTENTE:
+1. NUNCA faca triagem (tempo de empresa, carteira, etc). Isso irrita o cliente.
+2. Primeiro, peca o NOME COMPLETO se ainda nao tem (pra poder localizar no sistema)
+3. Depois, responda: "[nome], entendo. Vou acionar o advogado responsavel pelo seu caso pra te dar um retorno. Obrigada pela paciencia!"
+4. Se o cliente tiver NOTA DA EQUIPE na ficha, use pra contextualizar a resposta
+5. O sistema pausa automaticamente
 - NAO tente agendar nada.
 - NAO fique respondendo perguntas juridicas.
 - O sistema vai pausar automaticamente para o advogado atender pelo CRM.
@@ -524,7 +538,7 @@ function buildFichaLead(lead, history, contexto) {
   const temAdvogado = /(advogado|advogada|outro advogado|j[aá] procur)/i.test(allTextLeadOnly) && history.length > 4;
 
   // Detectar menção a advogado da equipe (= cliente existente em tratativa)
-  const mencionouEquipe = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta)/i.test(allTextLeadOnly);
+  const mencionouEquipe = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta|meu caso.{0,20}(com voc|com o escrit|no escrit)|meu processo.{0,20}(com voc|com o escrit|no escrit)|andamento.{0,15}(do meu|do processo|do caso)|previs[ãa]o.{0,15}(de audi[eê]ncia|do julgamento)|j[aá] (tive|teve|tivemos|fiz|fizemos).{0,15}(audi[eê]ncia|consulta)|alguma novidade.{0,15}(do meu|do caso|do processo)|como (est[aá]|anda|t[aá]).{0,15}(meu caso|meu processo|o processo|a a[cç][ãa]o))/i.test(allTextLeadOnly);
 
   // BLOQUEIOS — só nas ÚLTIMAS 3 msgs do lead (evita bloqueio eterno por menção antiga)
   // Ex: "meu marido trabalha na prefeitura, mas eu sou CLT" NÃO bloqueia

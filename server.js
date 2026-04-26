@@ -875,7 +875,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // IMPORTANTE: verificar só mensagens do LEAD (role='user'), não da Laura
     const ehClienteExistente = contexto && (contexto.tipo === 'cliente' || contexto.tipo === 'cliente_processo');
     const msgsDoLead = ((history || []).filter(m => m.role === 'user').map(m => m.content).join(' ') + ' ' + combinedText).toLowerCase();
-    const mencionouEquipeMsg = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta)/i.test(msgsDoLead);
+    const mencionouEquipeMsg = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta|meu caso.{0,20}(com voc|com o escrit|no escrit)|meu processo.{0,20}(com voc|com o escrit|no escrit)|andamento.{0,15}(do meu|do processo|do caso)|previs[ãa]o.{0,15}(de audi[eê]ncia|do julgamento)|j[aá] (tive|teve|tivemos|fiz|fizemos).{0,15}(audi[eê]ncia|consulta)|alguma novidade.{0,15}(do meu|do caso|do processo)|como (est[aá]|anda|t[aá]).{0,15}(meu caso|meu processo|o processo|a a[cç][ãa]o))/i.test(msgsDoLead);
     if (ehClienteExistente || mencionouEquipeMsg) {
       console.log(`[CLIENTE-NPL] ${phone} em tratativa — pausando IA 24h para advogado atender pelo CRM`);
       pauseAI(phone, 60 * 24);
