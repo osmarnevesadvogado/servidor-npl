@@ -882,14 +882,20 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       }
     }
 
-    // Se é cliente existente OU lead mencionou advogado da equipe,
-    // Laura se isenta e PAUSA automaticamente para o advogado atender pelo CRM
-    // IMPORTANTE: verificar só mensagens do LEAD (role='user'), não da Laura
-    const ehClienteExistente = contexto && (contexto.tipo === 'cliente' || contexto.tipo === 'cliente_processo');
+    // Decidir se Laura deve calar e deixar o advogado assumir (pause 24h).
+    // No modelo novo, Laura ATENDE o cliente como assistente premium — nao pausa
+    // por simples deteccao de cliente. So pausa em 2 cenarios fortes:
+    //   1. Cliente menciona advogado pelo NOME (ja esta em tratativa direta com pessoa)
+    //   2. A propria Laura, na resposta, sinalizou que vai escalar pro advogado
+    // Pedido generico de humano e tratado adiante (pause 2h, bloco do plano B).
     const msgsDoLead = ((history || []).filter(m => m.role === 'user').map(m => m.content).join(' ') + ' ' + combinedText).toLowerCase();
-    const mencionouEquipeMsg = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta|meu caso.{0,20}(com voc|com o escrit|no escrit)|meu processo.{0,20}(com voc|com o escrit|no escrit)|andamento.{0,15}(do meu|do processo|do caso)|previs[ãa]o.{0,15}(de audi[eê]ncia|do julgamento)|j[aá] (tive|teve|tivemos|fiz|fizemos).{0,15}(audi[eê]ncia|consulta)|alguma novidade.{0,15}(do meu|do caso|do processo)|como (est[aá]|anda|t[aá]).{0,15}(meu caso|meu processo|o processo|a a[cç][ãa]o))/i.test(msgsDoLead);
-    if (ehClienteExistente || mencionouEquipeMsg) {
-      console.log(`[CLIENTE-NPL] ${phone} em tratativa — pausando IA 24h para advogado atender pelo CRM`);
+    const mencionouAdvogadoNominal = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da)/i.test(msgsDoLead);
+    const replyLow = (reply || '').toLowerCase();
+    const lauraSinalizouEscalonamento = /(aciono.{0,30}(advogad|equipe)|vou (acionar|avisar|destacar|chamar).{0,30}(advogad|equipe|conversa)|destacando (a |sua )?conversa|advogad[ao].{0,40}(retorno|contato|te responder|te dar)|equipe.{0,40}(entrar em contato|te responder|te dar retorno|vai te))/i.test(replyLow);
+
+    if (mencionouAdvogadoNominal || lauraSinalizouEscalonamento) {
+      const motivo = mencionouAdvogadoNominal ? 'advogado nominal' : 'Laura escalou';
+      console.log(`[CLIENTE-NPL] ${phone} — pausando IA 24h (motivo: ${motivo})`);
       pauseAI(phone, 60 * 24);
     }
 
