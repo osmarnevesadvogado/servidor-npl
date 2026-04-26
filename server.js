@@ -518,9 +518,18 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     const fullHistory = await db.getHistory(conversa.id);
     const history = fullHistory.slice(0, -1);
     const cleanPhonePrimeiroContato = whatsapp.cleanPhone(phone);
+    // Lead JA avancou no funil (qualquer etapa alem de 'novo') significa que ele
+    // ja foi atendido antes. Mesmo que a conversa atual seja nova (pq a anterior
+    // foi finalizada apos agendamento, p.ex.), nao queremos repetir a apresentacao
+    // generica "Seja bem vindo! Qual seu nome completo?" — irrita o cliente que
+    // acabou de agendar e volta pra mandar mais info. Laura responde direto com
+    // o contexto que tem (lead.notas, etapa_funil) via prompt.
+    const leadJaAvancouNoFunil = lead && lead.etapa_funil &&
+      lead.etapa_funil !== 'novo';
     const ehPrimeiroContato =
       history.filter(m => m.role === 'assistant').length === 0 &&
-      !primeiroContatoEnviado.has(cleanPhonePrimeiroContato);
+      !primeiroContatoEnviado.has(cleanPhonePrimeiroContato) &&
+      !leadJaAvancouNoFunil;
 
     // Primeiro contato: enviar 2 msgs e PARAR (Laura responde só quando lead responder)
     // EXCECAO: se o telefone ja esta cadastrado como CLIENTE no CRM, pular apresentacao
