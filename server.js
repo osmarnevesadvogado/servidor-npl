@@ -2990,7 +2990,7 @@ app.post('/api/chat', requireApiKey, async (req, res) => {
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: config.CLAUDE_MODEL,
       max_tokens: 1024,
       system: system || '',
       messages: messages

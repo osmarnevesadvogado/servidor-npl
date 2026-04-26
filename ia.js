@@ -8,6 +8,32 @@ try { aprendizado = require('./aprendizado'); } catch (e) { console.log('[IA-NPL
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
+// Wrapper com retry exponencial pra calls do Claude.
+// Erros não-transientes (sem crédito, payload inválido) NÃO são retentados.
+async function callClaudeWithRetry(params, { maxRetries = 3, label = 'CLAUDE' } = {}) {
+  const isPermanente = (e) => {
+    const msg = e?.message || '';
+    if (msg.includes('credit balance') || msg.includes('too low')) return true;
+    const status = e?.status;
+    if (status === 400 || status === 401 || status === 403 || status === 404) return true;
+    return false;
+  };
+
+  let ultimaErr;
+  for (let tentativa = 1; tentativa <= maxRetries; tentativa++) {
+    try {
+      return await anthropic.messages.create(params);
+    } catch (e) {
+      ultimaErr = e;
+      if (isPermanente(e) || tentativa === maxRetries) throw e;
+      const delay = 1000 * Math.pow(2, tentativa); // 2s, 4s, 8s
+      console.warn(`[${label}] Tentativa ${tentativa} falhou (${e.status || '?'}): ${e.message}. Retry em ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw ultimaErr;
+}
+
 // ===== PROMPT BASE =====
 const SYSTEM_PROMPT_BASE = `Voce e a Laura, assistente virtual do escritorio NPLADVS, especializado em direitos trabalhistas, em Belem/PA. O escritorio atua ha anos na area e ja ajudou centenas de trabalhadores a recuperar seus direitos.
 
@@ -754,12 +780,16 @@ LEMBRE: Siga o PROXIMO PASSO indicado na ficha. Nao pergunte o que ja esta preen
   }
 
   try {
-    const response = await anthropic.messages.create({
+    // SYSTEM_PROMPT_BASE é estável (~50KB) — marcado com cache_control pra reaproveitar
+    // entre chamadas dentro de 5min. Reduz custo de input em ~90% no cache hit.
+    const response = await callClaudeWithRetry({
       model: config.CLAUDE_MODEL,
       max_tokens: config.MAX_TOKENS,
-      system: systemPrompt,
+      system: [
+        { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+      ],
       messages: cleanMessages
-    });
+    }, { label: 'CLAUDE-NPL' });
 
     return response.content[0].text;
   } catch (e) {
@@ -807,11 +837,11 @@ Se nenhuma regra acima se aplicar, gere UMA mensagem curta (2-3 frases) para ret
 - Conduza para agendamento da consulta gratuita.`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await callClaudeWithRetry({
       model: config.CLAUDE_MODEL,
       max_tokens: 500,
       messages: [{ role: 'user', content: prompt }]
-    });
+    }, { label: 'FOLLOWUP-NPL' });
 
     const reply = trimResponse(response.content[0].text);
 
@@ -865,11 +895,11 @@ ${conversaTexto}
 RESUMO EXECUTIVO:`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await callClaudeWithRetry({
       model: config.CLAUDE_MODEL,
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }]
-    });
+    }, { label: 'RESUMO-NPL' });
     const resumo = response.content[0].text.trim();
     console.log(`[RESUMO-NPL] Gerado para ${lead?.nome || 'lead'}: ${resumo.slice(0, 80)}...`);
     return resumo;
