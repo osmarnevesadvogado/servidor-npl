@@ -207,6 +207,41 @@ const agendamentoLock = new Set(); // phones em processo de agendamento
 // Chave = phone limpo. Limpa junto com outros caches.
 const primeiroContatoEnviado = new Set();
 
+// ===== TOGGLE GLOBAL DA LAURA =====
+// Controle on/off de toda a IA pra equipe assumir o atendimento manual em horarios
+// de pico (audiencias, demandas internas). Quando OFF, a Laura nao responde nada
+// (nem apresentacao programatica), mas msgs do lead continuam sendo salvas no banco
+// pra equipe ver no CRM. Ao voltar pra ON, Laura retoma normalmente as proximas msgs.
+//
+// Persistencia: estado eh salvo em metricas (evento 'laura_global_toggle') pra
+// sobreviver a deploys/restarts. Cache em memoria evita query a cada msg.
+let lauraGlobalmenteAtiva = true;
+let lauraGlobalEstadoSincronizado = false;
+
+async function syncLauraGlobalEstado() {
+  if (lauraGlobalEstadoSincronizado) return;
+  try {
+    const { data } = await db.supabase
+      .from('metricas')
+      .select('detalhes')
+      .eq('evento', 'laura_global_toggle')
+      .order('criado_em', { ascending: false })
+      .limit(1);
+    if (data && data[0]?.detalhes) {
+      try {
+        const det = JSON.parse(data[0].detalhes);
+        lauraGlobalmenteAtiva = det.ativa !== false;
+        console.log(`[LAURA-TOGGLE] Estado restaurado do banco: ${lauraGlobalmenteAtiva ? 'ATIVA' : 'DESATIVADA'}`);
+      } catch {}
+    }
+    lauraGlobalEstadoSincronizado = true;
+  } catch (e) {
+    console.error('[LAURA-TOGGLE] Erro ao buscar estado inicial:', e.message);
+  }
+}
+// Sync na inicializacao do servidor
+syncLauraGlobalEstado();
+
 // ===== CACHE @lid -> telefone (WhatsApp Multi-Device) =====
 // Quando a equipe manda msg pelo celular/Datacrazy (device vinculado),
 // a Z-API mascara o telefone do destinatario como @lid. Mantemos este
@@ -363,6 +398,19 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     const finalName = result.senderName;
 
     console.log(`[BUFFER-NPL] Processando ${combinedText.split('\n').length} msg(s) de ${phone}`);
+
+    // Toggle global da Laura desligado: salva msg do lead no banco e sai
+    // (equipe assume manualmente, Laura silenciosa)
+    if (!lauraGlobalmenteAtiva) {
+      console.log(`[LAURA-OFF] Msg de ${phone} salva mas IA desativada globalmente`);
+      try {
+        const conv = await db.getOrCreateConversa(phone);
+        await db.saveMessage(conv.id, 'user', combinedText);
+      } catch (e) {
+        console.error(`[LAURA-OFF] Erro ao salvar msg (${phone}):`, e.message);
+      }
+      return;
+    }
 
     // Verificar pausa ANTES de processar (pode ter sido pausada enquanto buffered)
     if (isAIPaused(phone)) {
@@ -1933,6 +1981,36 @@ app.get('/api/pausar/status', (req, res) => {
   if (!phone) return res.status(400).json({ error: 'phone obrigatorio' });
   const paused = isAIPaused(phone);
   res.json({ phone: whatsapp.cleanPhone(phone), paused });
+});
+
+// ===== TOGGLE GLOBAL DA LAURA (liga/desliga IA pra TODOS os leads) =====
+// Quando a equipe esta em audiencia/sobrecarregada, desliga a Laura pra atender
+// manualmente. Quando volta, religa. Diferente do pause individual (por telefone).
+
+app.get('/api/laura/status', (req, res) => {
+  res.json({ ativa: lauraGlobalmenteAtiva });
+});
+
+app.post('/api/laura/toggle', requireApiKey, async (req, res) => {
+  // Body: { ativa?: boolean (se omitido, inverte estado), usuario_nome?: string }
+  const novaState = req.body?.ativa !== undefined ? !!req.body.ativa : !lauraGlobalmenteAtiva;
+  const usuario = req.body?.usuario_nome || 'CRM';
+  const estadoAnterior = lauraGlobalmenteAtiva;
+  lauraGlobalmenteAtiva = novaState;
+
+  // Persiste em metricas pra sobreviver a deploy
+  try {
+    await db.trackEvent(null, null, 'laura_global_toggle', JSON.stringify({
+      ativa: lauraGlobalmenteAtiva,
+      usuario,
+      anterior: estadoAnterior
+    }));
+  } catch (e) {
+    console.error('[LAURA-TOGGLE] Erro ao persistir estado:', e.message);
+  }
+
+  console.log(`[LAURA-TOGGLE] ${lauraGlobalmenteAtiva ? 'ATIVADA' : 'DESATIVADA'} globalmente por ${usuario} (era ${estadoAnterior ? 'ATIVA' : 'DESATIVADA'})`);
+  res.json({ ok: true, ativa: lauraGlobalmenteAtiva, usuario });
 });
 
 // ===== DIAS NÃO ÚTEIS (feriados municipais, enforcados, férias da equipe) =====
