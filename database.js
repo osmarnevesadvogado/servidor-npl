@@ -898,6 +898,81 @@ async function getAnalytics(dias = 30) {
   }
 }
 
+// ===== WEBHOOK RAW (defesa contra perda de dados) =====
+// Salva o payload bruto do webhook ANTES de processar. Se algo quebrar
+// (bug novo, formato inesperado, falha do INSERT principal), o dado original
+// fica preservado em webhook_raw e pode ser reprocessado depois.
+
+async function saveWebhookRaw(body, endpoint, instancia) {
+  try {
+    const phone = body.phone || (body.from || '').replace('@c.us', '') || (body.to || '').replace('@c.us', '') || null;
+    const messageId = body.messageId || body.id || null;
+    const fromMe = body.fromMe === true || body.isFromMe === true;
+    const { data, error } = await supabase
+      .from('webhook_raw')
+      .insert({
+        body,
+        endpoint: endpoint || null,
+        instancia: instancia || null,
+        phone,
+        message_id: messageId,
+        from_me: fromMe,
+        processado: false
+      })
+      .select('id')
+      .single();
+    if (error) {
+      // Se nao conseguir salvar nem o raw, log mas NAO bloqueia o webhook
+      // (pior cenario: perdemos o raw mas o flow normal pode salvar).
+      console.error('[WEBHOOK-RAW] Falha ao salvar payload bruto:', error.message);
+      return null;
+    }
+    return data?.id || null;
+  } catch (e) {
+    console.error('[WEBHOOK-RAW] Excecao ao salvar payload bruto:', e.message);
+    return null;
+  }
+}
+
+async function marcarWebhookProcessado(id, erro = null) {
+  if (!id) return;
+  try {
+    const updates = {
+      processado: erro == null,
+      reprocessado_em: new Date().toISOString()
+    };
+    if (erro) updates.erro = String(erro).slice(0, 1000);
+    await supabase.from('webhook_raw').update(updates).eq('id', id);
+  } catch (e) {
+    console.error(`[WEBHOOK-RAW] Erro ao marcar webhook ${id}:`, e.message);
+  }
+}
+
+async function listarWebhooksFalhados(limite = 100) {
+  try {
+    const { data } = await supabase
+      .from('webhook_raw')
+      .select('id, endpoint, instancia, phone, message_id, from_me, erro, criado_em')
+      .eq('processado', false)
+      .order('criado_em', { ascending: false })
+      .limit(limite);
+    return data || [];
+  } catch (e) {
+    console.error('[WEBHOOK-RAW] Erro ao listar falhados:', e.message);
+    return [];
+  }
+}
+
+async function getWebhookRaw(id) {
+  try {
+    const { data } = await supabase.from('webhook_raw').select('*').eq('id', id).maybeSingle();
+    return data;
+  } catch (e) {
+    console.error(`[WEBHOOK-RAW] Erro ao buscar ${id}:`, e.message);
+    return null;
+  }
+}
+
 module.exports = {
   supabase,
   getOrCreateConversa,
@@ -907,6 +982,10 @@ module.exports = {
   getRecentMessages,
   getOrCreateLead,
   updateLead,
+  saveWebhookRaw,
+  marcarWebhookProcessado,
+  listarWebhooksFalhados,
+  getWebhookRaw,
   markLeadHot,
   extractAndUpdateLead,
   trackEvent,

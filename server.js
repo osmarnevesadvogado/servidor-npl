@@ -1508,13 +1508,19 @@ setInterval(() => {
 
 // ===== WEBHOOK Z-API — ESCRITÓRIO (só salva, sem IA) =====
 app.post('/webhook/zapi-escritorio', async (req, res) => {
+  // Salva payload bruto ANTES de qualquer processamento (defesa contra perda).
+  // Se algo quebrar abaixo, o dado original fica em webhook_raw.
+  const rawId = await db.saveWebhookRaw(req.body, '/webhook/zapi-escritorio', null);
   try {
     res.json({ ok: true });
 
     const body = req.body;
     const isFromMe = body.fromMe || body.isFromMe;
     const isMessage = body.type === 'ReceivedCallback' || body.text?.message || body.body;
-    if (!isMessage && !isFromMe) return;
+    if (!isMessage && !isFromMe) {
+      await db.marcarWebhookProcessado(rawId);
+      return;
+    }
 
     const phone = isFromMe
       ? (body.phone || body.to?.replace('@c.us', '') || '')
@@ -1608,16 +1614,24 @@ app.post('/webhook/zapi-escritorio', async (req, res) => {
       .insert({ conversa_id: conv.id, role, content, ...extra });
 
     console.log(`[ESCRITORIO-NPL] ${role === 'user' ? 'Recebida' : 'Enviada'}: ${tel} - ${content.slice(0, 60)}`);
+    await db.marcarWebhookProcessado(rawId);
   } catch (e) {
     console.error('[ESCRITORIO-NPL] Erro:', e.message);
+    await db.marcarWebhookProcessado(rawId, e.message);
   }
 });
 
 // ===== WEBHOOK Z-API — LAURA =====
 app.post('/webhook/zapi', async (req, res) => {
+  // Salva payload bruto ANTES de QUALQUER processamento (defesa contra perda).
+  // Se algo quebrar abaixo (validacao, dedup, processBuffered, etc), o dado
+  // original fica em webhook_raw e pode ser reprocessado depois.
+  const instanciaPreliminar = whatsapp.detectarInstancia ? whatsapp.detectarInstancia(req.body) : null;
+  const rawId = await db.saveWebhookRaw(req.body, '/webhook/zapi', instanciaPreliminar);
   try {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (!checkRateLimit(clientIp)) {
+      await db.marcarWebhookProcessado(rawId, 'rate_limit');
       return res.status(429).json({ error: 'Too many requests' });
     }
 
@@ -1626,6 +1640,7 @@ app.post('/webhook/zapi', async (req, res) => {
       const received = req.headers['client-token'] || req.headers['x-api-key'] || req.headers['authorization'] || req.query.token;
       if (received !== config.ZAPI_WEBHOOK_TOKEN) {
         console.log('[WEBHOOK-NPL] Token invalido recebido - rejeitando');
+        await db.marcarWebhookProcessado(rawId, 'token_invalido');
         return res.status(401).json({ error: 'Unauthorized' });
       }
     }
@@ -1941,12 +1956,18 @@ app.post('/webhook/zapi', async (req, res) => {
 
     res.json({ status: 'buffered' });
 
+    // Marca raw como processado=true (webhook fez a parte dele: validou e
+    // encaminhou pro buffer). Se o async falhar, o raw ainda esta salvo —
+    // basta consultar webhook_raw pelo phone/timestamp e reprocessar.
+    db.marcarWebhookProcessado(rawId).catch(() => {});
+
     processBufferedMessage(phone, text, senderName, false, instancia).catch(err => {
-      console.error('[ASYNC-NPL] Erro:', err.message);
+      console.error(`[ASYNC-NPL] Erro processando webhook (rawId=${rawId}, phone=${phone}):`, err.message);
     });
 
   } catch (e) {
     console.error('[WEBHOOK-NPL] Erro:', e.message);
+    await db.marcarWebhookProcessado(rawId, e.message);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Erro interno' });
     }
@@ -3198,6 +3219,57 @@ app.get('/api/auditoria/telefone/:phone', requireApiKey, auditAccess('read', 'le
 // 4. Insere no Supabase as que ainda nao existem (dedup ±60s por timestamp)
 //
 // Loga payload bruto da PRIMEIRA msg processada pra inspecao manual de campos.
+// ===== ADMIN: WEBHOOK RAW (defesa contra perda) =====
+// Lista os webhooks que ficaram com processado=false (algo deu errado no flow).
+// Util pra auditoria diaria + identificar incidentes.
+app.get('/api/admin/webhooks-falhados', requireApiKey, async (req, res) => {
+  try {
+    const limite = parseInt(req.query.limite) || 100;
+    const falhados = await db.listarWebhooksFalhados(limite);
+    res.json({ ok: true, total: falhados.length, falhados });
+  } catch (e) {
+    console.error('[WEBHOOK-RAW] Erro ao listar falhados:', e.message);
+    res.status(500).json({ error: 'Erro ao listar webhooks falhados' });
+  }
+});
+
+// Reprocessa um webhook salvo em webhook_raw pelo id.
+// Pega o body original e injeta no flow correspondente (/webhook/zapi ou
+// /webhook/zapi-escritorio) via fetch interno.
+app.post('/api/admin/reprocessar-webhook/:id', requireApiKey, async (req, res) => {
+  try {
+    const wh = await db.getWebhookRaw(req.params.id);
+    if (!wh) return res.status(404).json({ error: 'webhook_raw nao encontrado' });
+    if (!wh.body) return res.status(400).json({ error: 'webhook sem body salvo' });
+
+    // Reinjeta no proprio servidor (chamada local — Render mantem ate 60s)
+    const port = config.PORT || 3000;
+    const url = `http://localhost:${port}${wh.endpoint || '/webhook/zapi'}`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (config.ZAPI_WEBHOOK_TOKEN) headers['client-token'] = config.ZAPI_WEBHOOK_TOKEN;
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(wh.body),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    const okFlag = resp.ok;
+    let bodyTxt = '';
+    try { bodyTxt = await resp.text(); } catch {}
+
+    // Marca como reprocessado (atualiza erro se ainda falhou)
+    await db.marcarWebhookProcessado(wh.id, okFlag ? null : `reprocess HTTP ${resp.status}: ${bodyTxt.slice(0, 200)}`);
+
+    console.log(`[WEBHOOK-RAW] Reprocessado ${wh.id}: HTTP ${resp.status}`);
+    res.json({ ok: okFlag, status: resp.status, body: bodyTxt.slice(0, 500), webhook_id: wh.id });
+  } catch (e) {
+    console.error('[WEBHOOK-RAW] Erro ao reprocessar:', e.message);
+    res.status(500).json({ error: 'Erro ao reprocessar', detalhe: e.message });
+  }
+});
+
 app.post('/api/admin/recuperar-midia-datacrazy', requireApiKey, async (req, res) => {
   if (!config.DATACRAZY_API_TOKEN) {
     return res.status(503).json({ error: 'DATACRAZY_API_TOKEN nao configurado' });
