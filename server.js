@@ -2655,6 +2655,16 @@ app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (r
             await db.supabase.from('clientes').update({ nome_completo: updates.nome }).eq('id', cliente.id);
             console.log(`[LEADS] Cliente sincronizado: ${updates.nome}`);
           }
+
+          // Sincronizar nome em consultas FUTURAS no Google Calendar (Agenda do CRM)
+          if (calendar?.atualizarNomeNoCalendar) {
+            try {
+              const n = await calendar.atualizarNomeNoCalendar(telNorm, updates.nome);
+              if (n > 0) console.log(`[LEADS] ${n} consulta(s) sincronizada(s) no Calendar para "${updates.nome}"`);
+            } catch (e) {
+              console.error('[LEADS] Erro ao sincronizar nome no Calendar:', e.message);
+            }
+          }
         }
       } catch (e) {
         console.log('[LEADS] Erro ao sincronizar cliente:', e.message);
@@ -2767,6 +2777,53 @@ app.get('/api/agendamentos', requireApiKey, async (req, res) => {
   } catch (e) {
     console.error('[AGENDAMENTOS] Erro:', e.message);
     res.status(500).json({ error: 'Erro ao buscar agendamentos' });
+  }
+});
+
+// Excluir agendamento desqualificado (lead nao compareceu / nao deu retorno).
+// Cancela evento no Google Calendar + opcionalmente marca lead como 'perdido'.
+// Body: { marcar_perdido?: boolean (default true), motivo?: string }
+app.delete('/api/agendamentos/:id', requireApiKey, auditAccess('delete', 'agendamento'), async (req, res) => {
+  try {
+    if (!calendar) {
+      return res.status(503).json({ error: 'Calendar nao configurado' });
+    }
+    const eventId = req.params.id;
+    const marcarPerdido = req.body?.marcar_perdido !== false; // default: true
+    const motivo = req.body?.motivo || 'no-show';
+    const usuario = req.body?.usuario_nome || 'CRM';
+
+    const cancelado = await calendar.cancelarConsultaPorId(eventId);
+    if (!cancelado) {
+      return res.status(404).json({ error: 'Evento nao encontrado ou erro ao cancelar' });
+    }
+
+    // Se temos telefone, marcar lead como perdido + tracking
+    let leadAtualizado = null;
+    if (cancelado.telefone && marcarPerdido) {
+      try {
+        const lead = await db.getLeadByPhone(cancelado.telefone);
+        if (lead?.id) {
+          await db.updateLead(lead.id, { etapa_funil: 'perdido' });
+          const conversa = await db.getOrCreateConversa(cancelado.telefone);
+          await db.trackEvent(conversa?.id, lead.id, 'agendamento_excluido', `${motivo} (por ${usuario})`);
+          leadAtualizado = { id: lead.id, nome: lead.nome };
+          console.log(`[AGENDAMENTOS] Excluido evento ${eventId} (${cancelado.summary}) — lead ${lead.id} marcado perdido por ${usuario}: ${motivo}`);
+        }
+      } catch (e) {
+        console.error('[AGENDAMENTOS] Erro ao marcar lead perdido:', e.message);
+      }
+    }
+
+    res.json({
+      ok: true,
+      cancelado: { id: eventId, summary: cancelado.summary, telefone: cancelado.telefone },
+      lead: leadAtualizado,
+      motivo
+    });
+  } catch (e) {
+    console.error('[AGENDAMENTOS] Erro ao excluir:', e.message);
+    res.status(500).json({ error: 'Erro ao excluir agendamento' });
   }
 });
 

@@ -950,6 +950,76 @@ async function cancelarConsulta(telefone) {
   }
 }
 
+// ===== CANCELAR CONSULTA POR ID (para CRM excluir agendamento desqualificado) =====
+async function cancelarConsultaPorId(eventId) {
+  const calendar = getCalendarClient();
+  if (!calendar || !eventId) return null;
+  try {
+    const evento = await calendar.events.get({ calendarId: CALENDAR_ID, eventId });
+    await calendar.events.delete({ calendarId: CALENDAR_ID, eventId });
+    console.log(`[CALENDAR-NPL] Consulta cancelada (id=${eventId}): ${evento.data.summary}`);
+    const desc = evento.data.description || '';
+    const phoneMatch = desc.match(/Telefone:\s*(\d+)/);
+    return {
+      id: eventId,
+      summary: evento.data.summary,
+      telefone: phoneMatch ? phoneMatch[1] : null,
+      inicio: evento.data.start?.dateTime || evento.data.start?.date
+    };
+  } catch (e) {
+    console.error(`[CALENDAR-NPL] Erro ao cancelar consulta ${eventId}:`, e.message);
+    return null;
+  }
+}
+
+// ===== ATUALIZAR NOME EM CONSULTAS FUTURAS (sync com lead.nome) =====
+// Quando o nome do lead muda no banco, propaga pra consultas futuras agendadas
+// no Google Calendar. Sem isso, a "Agenda" do CRM mostra nome antigo (puxado do
+// summary do evento).
+async function atualizarNomeNoCalendar(telefone, nomeNovo) {
+  const calendar = getCalendarClient();
+  if (!calendar || !telefone || !nomeNovo) return 0;
+  try {
+    const agora = new Date();
+    const response = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: agora.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      timeZone: TIMEZONE,
+      maxResults: 50
+    });
+    const eventos = response.data.items || [];
+    const telLimpo = telefone.replace(/\D/g, '');
+    let atualizados = 0;
+    for (const ev of eventos) {
+      const desc = ev.description || '';
+      if (!desc.includes(telLimpo) || !ev.summary?.includes('Consulta Trabalhista')) continue;
+      // Substitui o nome no summary: "Consulta Trabalhista - <nome antigo> (Colab)"
+      const novoSummary = ev.summary.replace(
+        /(Consulta Trabalhista - ).+?( \([^)]+\))/,
+        `$1${nomeNovo}$2`
+      );
+      if (novoSummary === ev.summary) continue;
+      try {
+        await calendar.events.patch({
+          calendarId: CALENDAR_ID,
+          eventId: ev.id,
+          requestBody: { summary: novoSummary }
+        });
+        console.log(`[CALENDAR-NPL] Nome sincronizado no evento ${ev.id}: "${ev.summary}" -> "${novoSummary}"`);
+        atualizados++;
+      } catch (e) {
+        console.error(`[CALENDAR-NPL] Erro ao patch evento ${ev.id}:`, e.message);
+      }
+    }
+    return atualizados;
+  } catch (e) {
+    console.error('[CALENDAR-NPL] Erro ao listar eventos pra atualizar nome:', e.message);
+    return 0;
+  }
+}
+
 // ===== LISTAR CONSULTAS POR PERÍODO (para CRM) =====
 async function getConsultas(diasFuturos = 30) {
   const calendar = getCalendarClient();
@@ -1009,6 +1079,8 @@ module.exports = {
   criarConsulta,
   buscarConsultaPorTelefone,
   cancelarConsulta,
+  cancelarConsultaPorId,
+  atualizarNomeNoCalendar,
   encontrarSlot,
   construirSlotDeTexto,
   getConsultasDoDia,
