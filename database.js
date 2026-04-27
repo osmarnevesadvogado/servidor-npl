@@ -168,20 +168,37 @@ async function extractAndUpdateLead(leadId, text) {
 
   const nomePatterns = [
     /(?:me chamo|meu nome [eé]|pode me chamar de|meu nome)\s+([A-ZÀ-Úa-zà-ú][a-zà-ú]+(?: (?:de |da |do |dos |das )?[A-ZÀ-Úa-zà-ú][a-zà-ú]+){0,4})/i,
+    // Captura nome em CAIXA ALTA depois de "me chamo / meu nome eh" ("Meu nome é SIMONE",
+    // "Me chamo MARIA SILVA"). Whisper as vezes transcreve audio assim. Normalizado em
+    // Title Case mais abaixo.
+    /(?:me chamo|meu nome [eé]|pode me chamar de|meu nome)\s+([A-ZÀ-Ú]{2,15}(?: [A-ZÀ-Ú]{2,15}){0,4})\b/i,
     // Sem flag /i: o "sou" inicial casa minusculo OU maiusculo via grupo (?:sou|Sou|SOU),
     // mas o NOME capturado precisa comecar com maiuscula real ([A-ZÀ-Ú]) — evita capturar
     // frases tipo "sou do Rio de janeiro" como nome.
     /\b(?:sou|Sou|SOU)\s+(?:o\s+|a\s+)?([A-ZÀ-Ú][a-zà-ú]+(?: (?:de |da |do |dos |das )?[A-ZÀ-Úa-zà-ú][a-zà-ú]+){0,4})/,
+    // Mesma ideia pra "sou SIMONE" (tudo maiusculo)
+    /\b(?:sou|Sou|SOU)\s+(?:o\s+|a\s+)?([A-ZÀ-Ú]{2,15}(?: [A-ZÀ-Ú]{2,15}){0,4})\b/,
     /(?:^|\n)\s*([A-ZÀ-Ú][a-zà-ú]+(?: (?:de |da |do |dos |das )?[A-ZÀ-Ú][a-zà-ú]+){1,4})\s*(?:\n|$)/m,
     /(?:^|\n)\s*([A-ZÀ-Ú][a-zà-ú]{2,15})\s*(?:\n|$)/m
   ];
   const palavrasComuns = /^(sim|nao|não|oi|ola|olá|bom|boa|ok|obrigad|tudo|bem|dia|noite|tarde|quero|tenho|preciso|pode|certo|isso|aqui|agora|trabalhei|trabalho|meu|minha|fui|era|estou|estive|muito|pouco|talvez|quase|sempre|nunca|prezada|prezado|doutor|doutora|senhor|senhora|bel|salve|oie|pessoal|galera|gente|atenciosamente|cordialmente|obrigada|desculpa|desculpe|entendi|entendo|claro|perfeito|beleza|blz|show|do|da|de|dos|das|no|na|nos|nas|em|por|pra|para|com|sem|ao|aos|um|uma|uns|umas|eu|você|voce|ele|ela|nós|nos|vocês|voces|eles|elas|esse|essa|aquele|aquela|este|esta|que|quem|onde|quando|porque|por que|pq|tava|estava|estavam|fomos|foram|tive|teve|tivemos)$/i;
   const verbosForma = /^(recebi|mandei|trouxe|vi|vou|vai|vem|faço|faz|fez|saiu|sai|entrei|peguei|teve|temos|disse|vim|viajei|cheguei|liguei|ganho|ganhei|perdi|sou|é|está|estou|estive|estava|estavam|tava|tinha|tive|teve|fui|foi|fomos|foram|seria|seriam|posso|pode|podemos|podem)$/i;
 
+  // Se o nome veio TODO em CAIXA ALTA (Whisper as vezes transcreve assim),
+  // normaliza pra Title Case ("SIMONE SOUZA" -> "Simone Souza").
+  const titleCase = (s) => s.split(/\s+/).map(p => {
+    if (/^(de|da|do|dos|das)$/i.test(p)) return p.toLowerCase();
+    return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
+  }).join(' ');
+
   for (const pattern of nomePatterns) {
     const match = text.match(pattern);
     if (!match) continue;
-    const nomeCapturado = match[1].trim();
+    let nomeCapturado = match[1].trim();
+    // Se veio tudo maiusculo, normaliza
+    if (nomeCapturado === nomeCapturado.toUpperCase() && /[A-ZÀ-Ú]/.test(nomeCapturado)) {
+      nomeCapturado = titleCase(nomeCapturado);
+    }
     const primeiraPalavra = nomeCapturado.split(' ')[0];
     if (nomeCapturado.length < 3 || nomeCapturado.length >= 50) continue;
     if (palavrasComuns.test(primeiraPalavra) || verbosForma.test(primeiraPalavra)) continue;
