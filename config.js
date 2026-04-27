@@ -6,7 +6,12 @@ require('dotenv').config();
 module.exports = {
   // Anthropic (Claude) — pode usar a mesma API key
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  // Modelo padrao (casos sensiveis): cliente premium, agendamento, documentos,
+  // plano B, casos onde a Laura precisa raciocinar com nuance.
   CLAUDE_MODEL: 'claude-sonnet-4-20250514',
+  // Modelo barato pra triagem inicial (lead novo/contato): perguntas padronizadas,
+  // coleta de dados, empatia simples. Tambem usado em follow-ups.
+  CLAUDE_MODEL_TRIAGEM: 'claude-haiku-4-5-20251001',
   MAX_TOKENS: 800,
 
   // OpenAI (Whisper — transcrição de áudio)

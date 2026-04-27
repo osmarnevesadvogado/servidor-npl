@@ -8,6 +8,32 @@ try { aprendizado = require('./aprendizado'); } catch (e) { console.log('[IA-NPL
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
+// Decide qual modelo Claude usar com base no contexto.
+// Triagem simples (lead novo/contato sem cliente reconhecido) = Haiku (3-5x mais barato).
+// Casos sensiveis (cliente, agendamento, planilha, documentos) = Sonnet (raciocinio melhor).
+// Resultado: ~70% das msgs vao em Haiku, ~30% em Sonnet — economia agressiva sem perder
+// qualidade onde importa.
+function escolherModelo(lead, contexto) {
+  // Cliente reconhecido por qualquer caminho — sempre Sonnet (atendimento premium)
+  if (contexto && (
+    contexto.tipo === 'cliente' ||
+    contexto.tipo === 'cliente_processo' ||
+    contexto.tipo === 'cliente_processo_pendente'
+  )) {
+    return config.CLAUDE_MODEL;
+  }
+  // Lead em etapa avancada do funil — Sonnet
+  if (lead && (
+    lead.etapa_funil === 'cliente' ||
+    lead.etapa_funil === 'agendamento' ||
+    lead.etapa_funil === 'documentos'
+  )) {
+    return config.CLAUDE_MODEL;
+  }
+  // Triagem inicial (novo, contato, sem etapa) — Haiku
+  return config.CLAUDE_MODEL_TRIAGEM;
+}
+
 // Wrapper com retry exponencial pra calls do Claude.
 // Erros não-transientes (sem crédito, payload inválido) NÃO são retentados.
 async function callClaudeWithRetry(params, { maxRetries = 3, label = 'CLAUDE' } = {}) {
@@ -800,14 +826,19 @@ LEMBRE: Siga o PROXIMO PASSO indicado na ficha. Nao pergunte o que ja esta preen
   try {
     // SYSTEM_PROMPT_BASE é estável (~50KB) — marcado com cache_control pra reaproveitar
     // entre chamadas dentro de 5min. Reduz custo de input em ~90% no cache hit.
+    // Roteamento: triagem inicial usa Haiku (mais barato), casos sensiveis Sonnet.
+    const modelo = escolherModelo(lead, contexto);
+    const ehHaiku = modelo === config.CLAUDE_MODEL_TRIAGEM;
+    console.log(`[IA-NPL] Modelo: ${ehHaiku ? 'HAIKU' : 'SONNET'} (etapa=${lead?.etapa_funil || 'novo'}, ctx=${contexto?.tipo || 'lead'})`);
+
     const response = await callClaudeWithRetry({
-      model: config.CLAUDE_MODEL,
+      model: modelo,
       max_tokens: config.MAX_TOKENS,
       system: [
         { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
       ],
       messages: cleanMessages
-    }, { label: 'CLAUDE-NPL' });
+    }, { label: ehHaiku ? 'CLAUDE-NPL-HAIKU' : 'CLAUDE-NPL-SONNET' });
 
     return response.content[0].text;
   } catch (e) {
@@ -855,8 +886,9 @@ Se nenhuma regra acima se aplicar, gere UMA mensagem curta (2-3 frases) para ret
 - Conduza para agendamento da consulta gratuita.`;
 
   try {
+    // Follow-up = msg amigavel padronizada ("ficou com duvida?"). Haiku da conta.
     const response = await callClaudeWithRetry({
-      model: config.CLAUDE_MODEL,
+      model: config.CLAUDE_MODEL_TRIAGEM,
       max_tokens: 500,
       messages: [{ role: 'user', content: prompt }]
     }, { label: 'FOLLOWUP-NPL' });
