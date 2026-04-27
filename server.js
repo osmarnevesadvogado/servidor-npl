@@ -3014,6 +3014,116 @@ app.get('/api/documentos/auditoria/:phone', requireApiKey, auditAccess('read', '
   }
 });
 
+// ===== AUDITORIA COMPLETA POR TELEFONE =====
+// Retorna leads + conversas + mensagens + metricas + tarefas pro telefone, em
+// multiplos formatos (com 9, sem 9, com +). Usado pra investigar incidentes
+// de "msg sumiu" / "lead nao apareceu no CRM". Auditado.
+app.get('/api/auditoria/telefone/:phone', requireApiKey, auditAccess('read', 'lead'), async (req, res) => {
+  try {
+    const raw = req.params.phone;
+    // Normaliza pra varios formatos possiveis
+    const limpo = raw.replace(/\D/g, '');
+    const com55 = limpo.startsWith('55') ? limpo : '55' + limpo;
+    const sem55 = com55.startsWith('55') ? com55.slice(2) : com55;
+    // Variantes com/sem 9 inicial pos-DDD (ex: 559182209267 vs 5591982209267)
+    const variantes = new Set([com55, sem55, '+' + com55, raw]);
+    if (com55.length === 12 && /^55\d{2}[2-9]/.test(com55)) {
+      variantes.add(com55.slice(0, 4) + '9' + com55.slice(4));
+    }
+    if (com55.length === 13 && /^55\d{2}9/.test(com55)) {
+      variantes.add(com55.slice(0, 4) + com55.slice(5));
+    }
+    const fmts = [...variantes];
+
+    // Buscar leads em qualquer formato
+    const leadsResp = await db.supabase
+      .from('leads')
+      .select('*')
+      .or(fmts.map(f => `telefone.eq.${f}`).join(','));
+    const leads = leadsResp.data || [];
+
+    // Buscar conversas
+    const convsResp = await db.supabase
+      .from('conversas')
+      .select('*')
+      .or(fmts.map(f => `telefone.eq.${f}`).join(','))
+      .order('criado_em', { ascending: false });
+    const conversas = convsResp.data || [];
+
+    // Mensagens de cada conversa
+    const conversaIds = conversas.map(c => c.id);
+    let mensagens = [];
+    if (conversaIds.length > 0) {
+      const msgsResp = await db.supabase
+        .from('mensagens')
+        .select('id, conversa_id, role, content, manual, usuario_nome, media_url, media_type, criado_em')
+        .in('conversa_id', conversaIds)
+        .order('criado_em', { ascending: true });
+      mensagens = msgsResp.data || [];
+    }
+
+    // Metricas (eventos rastreados)
+    const leadIds = leads.map(l => l.id);
+    let metricas = [];
+    if (leadIds.length > 0 || conversaIds.length > 0) {
+      const filters = [];
+      if (leadIds.length > 0) filters.push(`lead_id.in.(${leadIds.join(',')})`);
+      if (conversaIds.length > 0) filters.push(`conversa_id.in.(${conversaIds.join(',')})`);
+      const metricasResp = await db.supabase
+        .from('metricas')
+        .select('id, evento, detalhes, lead_id, conversa_id, criado_em')
+        .or(filters.join(','))
+        .order('criado_em', { ascending: false })
+        .limit(200);
+      metricas = metricasResp.data || [];
+    }
+
+    // Tarefas (associadas a casos -> conversa, mas mais simples: buscar por lead)
+    let tarefas = [];
+    if (leadIds.length > 0) {
+      try {
+        const tarefasResp = await db.supabase
+          .from('tarefas')
+          .select('id, descricao, status, data_limite, criado_em, caso_id')
+          .order('criado_em', { ascending: false })
+          .limit(50);
+        tarefas = tarefasResp.data || [];
+      } catch (e) { /* tarefas pode nao existir em todos os schemas */ }
+    }
+
+    // Resumo
+    const totalMsgsLead = mensagens.filter(m => m.role === 'user').length;
+    const totalMsgsAssistantIA = mensagens.filter(m => m.role === 'assistant' && !m.manual).length;
+    const totalMsgsAssistantHumano = mensagens.filter(m => m.role === 'assistant' && m.manual).length;
+    const totalMidias = mensagens.filter(m => m.media_url || m.media_type).length;
+    const ultimaMsg = mensagens[mensagens.length - 1] || null;
+
+    res.json({
+      phone_buscado: raw,
+      formatos_testados: fmts,
+      resumo: {
+        leads: leads.length,
+        conversas: conversas.length,
+        mensagens_total: mensagens.length,
+        mensagens_lead: totalMsgsLead,
+        mensagens_laura: totalMsgsAssistantIA,
+        mensagens_equipe_humano: totalMsgsAssistantHumano,
+        midias: totalMidias,
+        metricas: metricas.length,
+        ultima_mensagem: ultimaMsg ? { role: ultimaMsg.role, manual: ultimaMsg.manual, criado_em: ultimaMsg.criado_em, content: (ultimaMsg.content || '').slice(0, 200) } : null
+      },
+      leads,
+      conversas,
+      mensagens,
+      metricas,
+      tarefas
+    });
+  } catch (e) {
+    console.error('[AUDITORIA-TELEFONE] Erro:', e.message);
+    res.status(500).json({ error: 'Erro na auditoria', detalhe: e.message });
+  }
+});
+
 // Cobrar documentos faltantes do cliente
 app.post('/api/documentos/cobrar', requireApiKey, async (req, res) => {
   try {
