@@ -84,16 +84,32 @@ O CRM frontend (hospedado no GitHub Pages, repositório `npladvs-crm`) chama dir
 **npl_clientes_processos** — base de clientes antigos (importada)
 
 ## Modelo de IA
-- **Claude Sonnet 4** (claude-sonnet-4-20250514) — modelo principal para conversas (config.js)
-- **Claude Haiku 4.5** — classificação/cobrança de documentos (documentos.js)
-- **Claude Opus 4.7** — extração estruturada de PDF (documentos.js)
+- **Claude Sonnet 4** (`config.CLAUDE_MODEL` = claude-sonnet-4-20250514) — modelo padrão para casos sensíveis
+- **Claude Haiku 4.5** (`config.CLAUDE_MODEL_TRIAGEM` = claude-haiku-4-5-20251001) — triagem inicial e follow-ups
+- **Claude Opus 4.7** — extração estruturada de PDF (documentos.js, pontual)
 - MAX_TOKENS: 800 (respostas objetivas)
 - Janela de contexto: 150 mensagens enviadas ao Claude
 - Ficha do lead: 40 mensagens anteriores resumidas
 - trimResponse: máx 8 frases
-- **Prompt caching ativado** em `generateResponse` (ia.js): SYSTEM_PROMPT_BASE (~50KB) marcado com `cache_control: ephemeral`. Cache hit cobra 10% do input — economia ~90% em janelas de 5min (rajadas, follow-ups, lembretes consecutivos)
-- **Retry exponencial** (`callClaudeWithRetry` em ia.js): 3 tentativas com backoff 2s/4s/8s. Erros permanentes (sem crédito, 4xx) pulam o retry. Aplicado em generateResponse, generateFollowUp, gerarResumoCaso
-- **Proxy `/api/chat`** do CRM usa `config.CLAUDE_MODEL` (não mais hardcoded)
+
+### Roteamento Haiku/Sonnet (`escolherModelo` em ia.js)
+A cada `generateResponse`, o modelo é decidido dinamicamente:
+
+| Cenário | Modelo |
+|---|---|
+| Lead em `novo`/`contato` (triagem) sem cliente reconhecido | **Haiku 4.5** |
+| Cliente CRM (`contexto.tipo === 'cliente'`) | **Sonnet 4** |
+| Cliente da planilha (`cliente_processo*`) | **Sonnet 4** |
+| Lead em `agendamento` / `documentos` / `cliente` | **Sonnet 4** |
+| `generateFollowUp` (msg amigável padronizada) | **Haiku 4.5** |
+| `gerarResumoCaso` (vai pro advogado, qualidade > custo) | **Sonnet 4** |
+
+Distribuição esperada: ~70% Haiku + ~30% Sonnet. Cada call loga `[IA-NPL] Modelo: HAIKU|SONNET (etapa=X, ctx=Y)` pra auditoria.
+
+### Performance & Resiliência
+- **Prompt caching ativado** em `generateResponse` (ia.js): SYSTEM_PROMPT_BASE (~50KB) marcado com `cache_control: ephemeral`. Cache hit cobra 10% do input — economia ~90% em janelas de 5min (rajadas, follow-ups, lembretes consecutivos). Cache funciona separadamente em cada modelo (Haiku e Sonnet têm caches independentes).
+- **Retry exponencial** (`callClaudeWithRetry` em ia.js): 3 tentativas com backoff 2s/4s/8s. Erros permanentes (sem crédito, 4xx) pulam o retry. Aplicado em generateResponse, generateFollowUp, gerarResumoCaso.
+- **Proxy `/api/chat`** do CRM usa `config.CLAUDE_MODEL` (não mais hardcoded).
 
 ## Primeiro Contato (programático — não depende da IA)
 Quando um lead **totalmente novo** manda a primeira mensagem, o servidor envia **2 msgs** e para. Laura só responde quando o lead responder.
