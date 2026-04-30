@@ -1236,6 +1236,31 @@ async function checkFollowUps() {
         console.error(`[FOLLOWUP-NPL] Erro ao verificar consulta_agendada (conv ${conv.id}):`, e.message);
       }
 
+      // Proteção CRITICA: se a equipe humana (manual=true) respondeu este lead
+      // nas ULTIMAS 72h, NAO disparar follow-up. Caso real: cliente em tratativa
+      // direta com Dr. Bruno via Datacrazy recebia follow-up "lembrando do prazo
+      // de 2 anos" — totalmente fora de contexto. A equipe atendendo manualmente
+      // significa que o lead ja esta em tratativa (mesmo que etapa_funil ainda
+      // nao tenha sido atualizada manualmente).
+      try {
+        const limite72h = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+        const { data: msgEquipe } = await db.supabase
+          .from('mensagens')
+          .select('id, criado_em, usuario_nome')
+          .eq('conversa_id', conv.id)
+          .eq('role', 'assistant')
+          .eq('manual', true)
+          .gte('criado_em', limite72h)
+          .order('criado_em', { ascending: false })
+          .limit(1);
+        if (msgEquipe && msgEquipe.length > 0) {
+          console.log(`[FOLLOWUP-NPL] Skip — equipe atendendo (${msgEquipe[0].usuario_nome || '?'}) ha ${Math.round((now - new Date(msgEquipe[0].criado_em).getTime())/3600000)}h: conv ${conv.id}`);
+          continue;
+        }
+      } catch (e) {
+        console.error(`[FOLLOWUP-NPL] Erro ao checar atendimento humano (conv ${conv.id}):`, e.message);
+      }
+
       const lastMsg = lastMsgs[0];
       const hoursAgo = (now - new Date(lastMsg.criado_em).getTime()) / (1000 * 60 * 60);
 

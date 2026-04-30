@@ -934,6 +934,7 @@ REGRAS CRITICAS — LEIA ANTES DE ESCREVER:
 1. Se a conversa mostra que voce (Laura) ja DISPENSOU o lead (disse "nao atendemos", "recomendo procurar outro advogado", "prazo ultrapassado", "nao podemos ajudar", "caso de prefeitura"), NAO envie follow-up. Responda EXATAMENTE: "SKIP_DISPENSADO"
 2. Se a conversa mostra que o lead disse que NAO tem interesse, NAO insista. Responda: "SKIP_SEM_INTERESSE"
 3. Se a conversa mostra que uma consulta JA FOI AGENDADA, NAO ofereca outra. Responda: "SKIP_JA_AGENDADO"
+4. Se a conversa mostra atendimento da EQUIPE HUMANA recente (linhas comecando com "EQUIPE (Dr/Dra Fulano):") — significa que o lead ja esta em tratativa direta com advogado. NAO mande follow-up generico que vai parecer fora de contexto. Responda EXATAMENTE: "SKIP_EQUIPE_ATENDENDO"
 
 Se nenhuma regra acima se aplicar, gere UMA mensagem curta (2-3 frases) para retomar contato:
 - Sem emojis
@@ -944,7 +945,8 @@ Se nenhuma regra acima se aplicar, gere UMA mensagem curta (2-3 frases) para ret
 - ${followUpNumber === 3 ? 'Use argumentos: prazo de 2 anos, consulta gratuita. Crie urgencia se o caso permitir.' : ''}
 - ${followUpNumber === 4 ? 'Mensagem final, respeitosa. Diga que nao quer incomodar mas esta a disposicao.' : ''}
 - Nao mencione email. Confirmacao e por WhatsApp.
-- Conduza para agendamento da consulta gratuita.`;
+- Conduza para agendamento da consulta gratuita.
+- TERMINE a mensagem com 1 linha em branco e a assinatura: "_Laura — Assistente Virtual (IA) | Escritorio NPL_"`;
 
   try {
     // Follow-up = msg amigavel padronizada ("ficou com duvida?"). Haiku da conta.
@@ -954,12 +956,21 @@ Se nenhuma regra acima se aplicar, gere UMA mensagem curta (2-3 frases) para ret
       messages: [{ role: 'user', content: prompt }]
     }, { label: 'FOLLOWUP-NPL' });
 
-    const reply = trimResponse(response.content[0].text);
+    let reply = trimResponse(response.content[0].text);
 
     // Se a IA detectou que não deve enviar follow-up, retornar null
-    if (reply.includes('SKIP_DISPENSADO') || reply.includes('SKIP_SEM_INTERESSE') || reply.includes('SKIP_JA_AGENDADO')) {
+    if (reply.includes('SKIP_DISPENSADO') ||
+        reply.includes('SKIP_SEM_INTERESSE') ||
+        reply.includes('SKIP_JA_AGENDADO') ||
+        reply.includes('SKIP_EQUIPE_ATENDENDO')) {
       console.log(`[FOLLOWUP-NPL] Skip para ${nome}: ${reply.slice(0, 40)}`);
       return null;
+    }
+
+    // Garantir assinatura presente — se a IA esqueceu, anexa
+    const ASSINATURA = '_Laura — Assistente Virtual (IA) | Escritorio NPL_';
+    if (!reply.includes('Laura') || !reply.includes('Assistente Virtual')) {
+      reply = reply.trim() + '\n\n' + ASSINATURA;
     }
 
     console.log(`[FOLLOWUP-NPL] Gerado para ${nome}: "${reply.slice(0, 60)}..."`);
