@@ -2083,9 +2083,14 @@ app.post('/webhook/zapi', async (req, res) => {
           try {
             transcricao = await audio.transcreverAudio(url);
           } catch (errTransc) {
-            console.error('[AUDIO-NPL] Erro na transcricao:', errTransc.message);
+            console.error(`[AUDIO-NPL] Erro na transcricao de ${phone}:`, errTransc.message);
           }
           if (!transcricao) {
+            // Loga e registra metrica pra auditar quantos audios falham na transcricao
+            console.warn(`[AUDIO-NPL] Transcricao falhou para ${phone} — enviando fallback`);
+            try {
+              await db.trackEvent(conversa.id, null, 'audio_transcricao_falhou', JSON.stringify({ url: url?.slice(0, 100) }));
+            } catch (e) { /* metric eh best-effort */ }
             await whatsapp.sendText(phone, 'Desculpe, nao consegui ouvir seu audio. Pode digitar ou enviar novamente?');
             return;
           }

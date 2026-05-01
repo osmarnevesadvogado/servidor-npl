@@ -37,15 +37,21 @@ function isUrlSegura(url) {
 }
 
 // ===== TRANSCREVER ÁUDIO (Whisper — OpenAI) =====
-// Timeouts: 15s pra baixar o audio do Z-API, 25s pra Whisper transcrever.
-// Render mata request inteira em 30s — sem esses timeouts, audio lento
-// derrubava o webhook todo.
-const DOWNLOAD_TIMEOUT_MS = 15_000;
-const WHISPER_TIMEOUT_MS = 25_000;
+// Timeouts ajustados pra audios longos (cliente explicando caso por 1-2min):
+//   - Download: 30s (Z-API as vezes lenta)
+//   - Whisper: 90s (audio de 2min processa em ~30-60s)
+// O flow de audio em server.js eh async fire-and-forget, entao Render nao
+// mata por causa desses timeouts (so do request HTTP do webhook em si).
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const WHISPER_TIMEOUT_MS = 90_000;
+const WHISPER_MAX_RETRIES = 2; // total de tentativas (1 inicial + 1 retry)
 
 async function transcreverAudio(audioUrl) {
   const client = getOpenAI();
-  if (!client) return null;
+  if (!client) {
+    console.error('[AUDIO-NPL] OpenAI client nao disponivel (sem OPENAI_API_KEY?)');
+    return null;
+  }
 
   if (!isUrlSegura(audioUrl)) {
     console.log('[AUDIO-NPL] URL bloqueada (SSRF):', audioUrl?.slice(0, 50));
@@ -53,38 +59,69 @@ async function transcreverAudio(audioUrl) {
   }
 
   let tempFile = null;
+  const inicioTotal = Date.now();
 
   try {
-    console.log('[AUDIO-NPL] Baixando áudio:', audioUrl.slice(0, 80));
+    console.log(`[AUDIO-NPL] Baixando audio: ${audioUrl.slice(0, 80)}`);
+    const inicioDownload = Date.now();
 
     const response = await fetch(audioUrl, {
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
     });
-    if (!response.ok) throw new Error(`Erro ao baixar áudio: ${response.status}`);
+    if (!response.ok) throw new Error(`download HTTP ${response.status}`);
 
     const buffer = Buffer.from(await response.arrayBuffer());
+    const tamanhoKB = Math.round(buffer.length / 1024);
+    console.log(`[AUDIO-NPL] Download OK em ${Date.now() - inicioDownload}ms (${tamanhoKB}KB)`);
 
     tempFile = path.join(os.tmpdir(), `audio_npl_${Date.now()}.ogg`);
     fs.writeFileSync(tempFile, buffer);
 
-    console.log('[AUDIO-NPL] Enviando para Whisper...');
+    // Tenta transcrever com retry em caso de timeout/erro transitorio
+    let lastErr = null;
+    for (let tentativa = 1; tentativa <= WHISPER_MAX_RETRIES; tentativa++) {
+      const inicioWhisper = Date.now();
+      try {
+        console.log(`[AUDIO-NPL] Enviando pra Whisper (tentativa ${tentativa}/${WHISPER_MAX_RETRIES}, ${tamanhoKB}KB)`);
+        const transcription = await client.audio.transcriptions.create({
+          file: fs.createReadStream(tempFile),
+          model: 'whisper-1',
+          language: 'pt',
+          response_format: 'text'
+        }, {
+          timeout: WHISPER_TIMEOUT_MS
+        });
 
-    const transcription = await client.audio.transcriptions.create({
-      file: fs.createReadStream(tempFile),
-      model: 'whisper-1',
-      language: 'pt',
-      response_format: 'text'
-    }, {
-      timeout: WHISPER_TIMEOUT_MS
-    });
+        const texto = (transcription || '').trim();
+        const duracaoWhisper = Date.now() - inicioWhisper;
+        const duracaoTotal = Date.now() - inicioTotal;
 
-    const texto = transcription.trim();
-    console.log(`[AUDIO-NPL] Transcrito: "${texto.slice(0, 100)}"`);
-    return texto;
+        if (!texto) {
+          console.warn(`[AUDIO-NPL] Whisper retornou texto VAZIO em ${duracaoWhisper}ms (audio ${tamanhoKB}KB) — tentativa ${tentativa}`);
+          lastErr = new Error('whisper retornou vazio');
+          continue;
+        }
+
+        console.log(`[AUDIO-NPL] Transcrito em ${duracaoWhisper}ms (total ${duracaoTotal}ms): "${texto.slice(0, 100)}"`);
+        return texto;
+      } catch (e) {
+        lastErr = e;
+        const duracaoWhisper = Date.now() - inicioWhisper;
+        const ehTimeout = e.name === 'TimeoutError' || e.name === 'AbortError' || /timeout|timed out/i.test(e.message || '');
+        if (ehTimeout) {
+          console.error(`[AUDIO-NPL] Whisper TIMEOUT apos ${duracaoWhisper}ms (audio ${tamanhoKB}KB, tentativa ${tentativa})`);
+        } else {
+          console.error(`[AUDIO-NPL] Whisper erro apos ${duracaoWhisper}ms (tentativa ${tentativa}):`, e.message);
+        }
+        // Se erro nao-transitorio (4xx, payload invalido), nao retenta
+        if (e.status === 400 || e.status === 401 || e.status === 413) break;
+      }
+    }
+    throw lastErr || new Error('whisper falhou apos todas as tentativas');
 
   } catch (e) {
     if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-      console.error('[AUDIO-NPL] Timeout na transcrição:', e.message);
+      console.error(`[AUDIO-NPL] Timeout no download ou processo total apos ${Date.now() - inicioTotal}ms:`, e.message);
     } else {
       console.error('[AUDIO-NPL] Erro na transcrição:', e.message);
     }
