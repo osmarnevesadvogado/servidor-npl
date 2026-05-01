@@ -50,6 +50,12 @@ O CRM frontend (hospedado no GitHub Pages, repositório `npladvs-crm`) chama dir
 | GET | `/api/analise/horarios?dias=30` | Heatmap mensagens/hora × dia da semana |
 | GET | `/api/analise/origens?dias=30` | Leads por origem + taxa de conversão |
 | GET | `/api/auditoria?dias=7&acao=read&recurso=lead&usuario=X` | Log de acesso a dados sensíveis |
+| GET | `/api/auditoria/telefone/:phone` | Auditoria completa por telefone (lead+conversas+msgs+métricas) |
+| GET | `/api/admin/webhooks-falhados?limite=100` | Lista webhooks que ficaram com `processado=false` |
+| POST | `/api/admin/reprocessar-webhook/:id` | Reinjeta payload bruto no flow original |
+| GET | `/api/admin/mensagens-orfas?limite=100` | Lista msgs órfãs (@lid não resolvido) agrupadas por chat_lid |
+| POST | `/api/admin/atribuir-orfa/:id` | Move órfã pra conversa do `phone` + popula lidPhoneMap `{phone, usuario_nome?, atribuir_todas_do_lid?}` |
+| POST | `/api/admin/recuperar-midia-datacrazy` | Reaver mídias do cliente que ficaram só na Datacrazy `{phone, dias?}` |
 | POST | `/webhook/zapi` | Webhook da Laura (processa com IA) |
 | POST | `/webhook/zapi-escritorio` | Webhook do escritório (só salva, sem IA) |
 
@@ -77,10 +83,19 @@ O CRM frontend (hospedado no GitHub Pages, repositório `npladvs-crm`) chama dir
 
 **metricas** — eventos rastreados
 - `id`, `conversa_id`, `lead_id`, `evento`, `detalhes`, `escritorio`, `criado_em`
-- Eventos: primeiro_contato, lead_quente, consulta_agendada, followup_2h, followup_4h, followup_24h, followup_72h, etapa_avancou, objecao, alucinacao_detectada, feedback_mensagem, prazo_prescricional, auditoria_acesso, lembrete_*, pediu_humano, cliente_salvo, cliente_pediu_advogado
+- Eventos: primeiro_contato, lead_quente, consulta_agendada, followup_2h, followup_4h, followup_24h, followup_72h, etapa_avancou, objecao, alucinacao_detectada, feedback_mensagem, prazo_prescricional, auditoria_acesso, lembrete_*, pediu_humano, cliente_salvo, cliente_pediu_advogado, agendamento_excluido, laura_global_toggle, **documento_recebido** (detalhes JSON: `{tipo, silencioso}`)
 
 **dias_nao_uteis** — feriados adicionais, enforcados, férias da equipe
 - `id`, `data` (YYYY-MM-DD), `tipo` (enforcado/feriado/ferias), `descricao`, `escritorio`
+
+**webhook_raw** — defesa em camadas (PR #49). Toda chamada aos webhooks salva o JSON bruto ANTES de processar. Se algo quebrar, o dado não se perde. RLS desabilitada.
+- `id`, `body` (jsonb completo), `endpoint`, `instancia`, `phone`, `message_id`, `from_me`, `processado` (bool), `erro`, `reprocessado_em`, `criado_em`
+
+**mensagens_orfas** — defesa @lid (PR #50). Quando equipe responde cliente pelo celular vinculado e o `@lid` não resolve nem por match exato nem por primeiro nome, msg cai aqui pra triagem manual via `/api/admin/mensagens-orfas`. RLS desabilitada.
+- `id`, `chat_lid`, `chat_name`, `content`, `media_url`, `media_type`, `raw_body`, `endpoint`, `instancia`, `atribuida` (bool), `conversa_id` (após atribuição), `usuario_atribuiu`, `atribuida_em`, `criado_em`
+
+**documentos_em_recepcao** — modo documentos silencioso (PR #52). Estado persistente do cache de "lead em fase de envio" pra sobreviver multi-instância. RLS desabilitada.
+- `phone` (PK), `ultima_msg_em`, `total_msgs`
 
 **tarefas** — tarefas do CRM
 **aprendizados** — lições aprendidas pela IA
@@ -215,12 +230,23 @@ Campo `notas` do lead aparece em destaque na ficha como "NOTA DA EQUIPE SOBRE ES
 - Instância: cada lembrete usa `consulta.origem` (escritório ou prospecção) para enviar pelo número correto
 - **Salvos no banco**: helper `enviarLembrete()` envia + chama `db.saveMessage`. Sem isso, o polling do Datacrazy puxava a msg pelo espelho do número e salvava com rótulo "Equipe (Datacrazy)" no CRM.
 
+## Modo Documentos (silencioso)
+Quando lead em `etapa_funil = 'documentos'` envia arquivo (mídia sem pergunta clara), Laura NÃO responde a cada um.
+- 1ª mídia da janela (15min) → confirmação curta hardcoded: *"Perfeito, [nome]! Recebi. Pode mandar os outros documentos que precisar — registro tudo pra equipe."*
+- 2ª+ mídia na mesma janela → silenciosa, só salva no banco
+- Texto significativo (>40 chars OU `?`/`!` OU palavras-chave de pergunta) → reseta janela, Laura responde normal
+- Estado persistido em `documentos_em_recepcao` (sobrevive multi-instância)
+- Métrica `documento_recebido` registra cada arquivo com `{tipo, silencioso}` para auditoria
+
 ## Follow-ups (automáticos, 8h-20h Belém)
 - 2h, 4h, 24h, 72h sem resposta do lead
 - Contador usa eventos `followup_Xh` em metricas (não conta msgs programáticas como follow-ups)
 - 72h marca lead como `perdido`
 - Não se aplica a leads em etapa `agendamento`, `documentos`, `cliente` ou `perdido`
 - Proteção extra: verifica `consulta_agendada` em metricas antes de enviar
+- **Skip se equipe atendeu manualmente nas últimas 72h**: query nas mensagens com `manual=true, role='assistant'`. Se há, pula a conversa antes mesmo de chamar IA. Cobre cliente em tratativa direta cujo `etapa_funil` ainda não foi marcado como `cliente`.
+- IA tem regra `SKIP_EQUIPE_ATENDENDO` no prompt como camada extra
+- Assinatura `_Laura — Assistente Virtual (IA) | Escritorio NPL_` garantida (anexa se IA esquecer)
 
 ## Extração de Nomes
 - **pushName do WhatsApp**: emojis removidos, cargos/empresas filtrados
@@ -240,10 +266,14 @@ Campo `notas` do lead aparece em destaque na ficha como "NOTA DA EQUIPE SOBRE ES
 ## Captura de Mensagens Multi-Device
 ### Z-API (fromMe)
 - Mensagens enviadas pelo celular/WhatsApp Web chegam via webhook `fromMe=true`
-- Phone pode vir como `@lid` (Multi-Device privacy) — resolvido via cache `lidPhoneMap`
-- Cache populado apenas de msgs incoming (fromMe=false) — impede cache poisoning
-- Resolução fallback: match por chatName nas conversas (com normalização de acentos)
+- Phone pode vir como `@lid` (Multi-Device privacy) — resolução em 3 passos:
+  1. Cache `lidPhoneMap` em memória (populado por msgs incoming + atribuição manual de órfã)
+  2. **Match exato por chatName** com normalização de acentos
+  3. **Match por primeiro nome** (fallback, PR #50): se chatName="Paulo Drogasil" e banco tem "Paulo Roberto Nascimento" → resolve por "paulo". Pula nomes muito comuns quando há só 1 palavra. Aceita só com 1 candidato único (ambiguidade vira órfã).
+- Se NENHUM passo resolve → msg vai pra `mensagens_orfas` (em vez de descartar). Triagem manual via `/api/admin/mensagens-orfas`.
+- Atribuir órfã popula `lidPhoneMap` permanentemente — próximas msgs do mesmo @lid resolvem auto.
 - Dedup: `wasBotRecentSend` (60s) + `processedMessages` Map (TTL 30min por entrada) + conteúdo ±5min (cobre echoes lentos do Z-API que chegam 2-3min depois do envio)
+- **Tipos não suportados pela Meta** (sticker, location, viewOnce, contact, etc): `extrairTextoEMidia` detecta e retorna `mediaType='unknown'`. Prompt da Laura tem regra explícita: responder frase simples ("Recebi sua mensagem, [nome]! Vou registrar pra equipe verificar...") sem mencionar termos técnicos.
 
 ### Datacrazy (Cloud API)
 - Equipe usa Datacrazy (WhatsApp Cloud API) para atendimento — pipeline separada da Z-API
@@ -257,6 +287,24 @@ Campo `notas` do lead aparece em destaque na ficha como "NOTA DA EQUIPE SOBRE ES
 - Estagiária: Luiza
 - Se alguém mencionar um desses nomes, Laura trata como cliente existente em tratativa
 - **Detecção ampliada**: frases como "meu caso já está com vocês", "previsão de audiência", "andamento do processo" também identificam cliente existente (não só nome de advogado)
+
+## Defesa em Camadas (zero perda de dados)
+3 redes de segurança independentes — se uma falhar, as outras pegam:
+
+1. **`webhook_raw`** (PR #49): TODA chamada aos webhooks Z-API salva o JSON bruto ANTES de qualquer processamento. Se o flow normal quebrar (bug, schema, RLS), o dado fica preservado e pode ser reprocessado via `POST /api/admin/reprocessar-webhook/:id`.
+2. **`extrairTextoEMidia`** (PR #48): tipos não suportados pela Meta (sticker, location, viewOnce, etc) viram `mediaType='unknown'` com placeholder visível no CRM, em vez de sumir.
+3. **`mensagens_orfas`** (PR #50): mensagens da equipe pelo celular cujo `@lid` não resolve nem por match exato nem primeiro nome são salvas como órfãs (em vez de descartar) — triagem manual via CRM.
+
+Bonus: `saveMessage` propaga erro do Supabase via `throw` (antes engolia silente). Catches estratégicos garantem que loops (syncDatacrazy) não param em 1 falha.
+
+Endpoints `/api/admin/*` registrados em `metricas` (evento `auditoria_acesso`) via middleware `auditAccess`.
+
+## Toggle Global da Laura
+Liga/desliga IA pra TODOS os leads de uma vez (audiências, sobrecarga). Diferente do pause individual.
+- `GET /api/laura/status` → `{ ativa: bool }`
+- `POST /api/laura/toggle` → `{ativa?, usuario_nome?}` (alterna ou define)
+- Estado persiste em `metricas` (`laura_global_toggle`) — sobrevive deploy
+- Quando OFF: msgs do lead são salvas no banco pra equipe ver no CRM, mas Laura não responde (nem apresentação programática)
 
 ## Pause da IA (cirúrgica)
 A IA é pausada por 24h apenas em **2 cenários fortes** (não mais por simples detecção de cliente):
