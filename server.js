@@ -582,12 +582,17 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         const ultimaConfirmacao = recebendoDocumentos.get(cleanP) || 0;
         const dentroDaJanela = (Date.now() - ultimaConfirmacao) < RECEBENDO_DOCS_JANELA_MS;
 
-        // Salva metrica do documento recebido (auditoria) — sempre
+        // Salva metrica do documento recebido (auditoria) — sempre.
+        // Inclui flag `silencioso`: true se Laura nao respondeu (2a+ na janela),
+        // false se enviou confirmacao (1a da janela). Permite auditar
+        // "quantos docs vieram sem resposta da Laura" no relatorio semanal.
         try {
-          // Extrai media_type/url do trecho "[Lead enviou X]" — info simples pra metrica
           const tipoMatch = combinedText.match(/Lead enviou (uma imagem|um documento|um audio|um v[ií]deo)/i);
           const tipoDoc = tipoMatch ? tipoMatch[1] : 'midia';
-          await db.trackEvent(conversa.id, lead.id, 'documento_recebido', tipoDoc);
+          await db.trackEvent(conversa.id, lead.id, 'documento_recebido', JSON.stringify({
+            tipo: tipoDoc,
+            silencioso: dentroDaJanela
+          }));
         } catch (e) {
           console.error(`[DOCS-MODE] Erro ao tracker documento_recebido:`, e.message);
         }
@@ -3373,7 +3378,7 @@ app.get('/api/auditoria/telefone/:phone', requireApiKey, auditAccess('read', 'le
 // ===== ADMIN: WEBHOOK RAW (defesa contra perda) =====
 // Lista os webhooks que ficaram com processado=false (algo deu errado no flow).
 // Util pra auditoria diaria + identificar incidentes.
-app.get('/api/admin/webhooks-falhados', requireApiKey, async (req, res) => {
+app.get('/api/admin/webhooks-falhados', requireApiKey, auditAccess('list', 'webhooks_falhados'), async (req, res) => {
   try {
     const limite = parseInt(req.query.limite) || 100;
     const falhados = await db.listarWebhooksFalhados(limite);
@@ -3387,7 +3392,7 @@ app.get('/api/admin/webhooks-falhados', requireApiKey, async (req, res) => {
 // Reprocessa um webhook salvo em webhook_raw pelo id.
 // Pega o body original e injeta no flow correspondente (/webhook/zapi ou
 // /webhook/zapi-escritorio) via fetch interno.
-app.post('/api/admin/reprocessar-webhook/:id', requireApiKey, async (req, res) => {
+app.post('/api/admin/reprocessar-webhook/:id', requireApiKey, auditAccess('reprocess', 'webhook'), async (req, res) => {
   try {
     const wh = await db.getWebhookRaw(req.params.id);
     if (!wh) return res.status(404).json({ error: 'webhook_raw nao encontrado' });
@@ -3423,7 +3428,7 @@ app.post('/api/admin/reprocessar-webhook/:id', requireApiKey, async (req, res) =
 
 // ===== ADMIN: MENSAGENS ORFAS =====
 // Lista pendentes de triagem (msgs da equipe via celular cujo @lid nao resolveu).
-app.get('/api/admin/mensagens-orfas', requireApiKey, async (req, res) => {
+app.get('/api/admin/mensagens-orfas', requireApiKey, auditAccess('list', 'mensagens_orfas'), async (req, res) => {
   try {
     const limite = parseInt(req.query.limite) || 100;
     const orfas = await db.listarMsgsOrfas(limite);
@@ -3459,7 +3464,7 @@ app.get('/api/admin/mensagens-orfas', requireApiKey, async (req, res) => {
 // - Popula lidPhoneMap em memoria → proximas msgs daquele @lid resolvem auto
 // - Se atribuir_todas_do_lid=true (default), pega todas as outras msgs orfas
 //   com o mesmo chat_lid e tambem move pra mesma conversa
-app.post('/api/admin/atribuir-orfa/:id', requireApiKey, async (req, res) => {
+app.post('/api/admin/atribuir-orfa/:id', requireApiKey, auditAccess('attribute', 'mensagem_orfa'), async (req, res) => {
   try {
     const { phone, usuario_nome, atribuir_todas_do_lid = true } = req.body || {};
     if (!phone) return res.status(400).json({ error: 'phone obrigatorio' });
@@ -3525,7 +3530,7 @@ app.post('/api/admin/atribuir-orfa/:id', requireApiKey, async (req, res) => {
   }
 });
 
-app.post('/api/admin/recuperar-midia-datacrazy', requireApiKey, async (req, res) => {
+app.post('/api/admin/recuperar-midia-datacrazy', requireApiKey, auditAccess('recover', 'midia_datacrazy'), async (req, res) => {
   if (!config.DATACRAZY_API_TOKEN) {
     return res.status(503).json({ error: 'DATACRAZY_API_TOKEN nao configurado' });
   }
@@ -3963,13 +3968,20 @@ async function syncDatacrazy() {
         if (duplicada) continue;
 
         const attendantName = msg.attendant?.name || 'Equipe (Datacrazy)';
-        await db.saveMessage(conversa.id, 'assistant', msg.body, {
-          manual: true,
-          usuario_nome: attendantName,
-          criado_em: msg.createdAt
-        });
-        totalSalvas++;
-        console.log(`[DATACRAZY-SYNC] Salva: ${phone} "${msg.body.slice(0, 50)}" (${attendantName})`);
+        // try/catch local: saveMessage agora propaga erro do Supabase (RLS,
+        // schema, network). Sem essa rede, 1 msg ruim travaria o loop inteiro
+        // e perderia as msgs subsequentes da janela de polling.
+        try {
+          await db.saveMessage(conversa.id, 'assistant', msg.body, {
+            manual: true,
+            usuario_nome: attendantName,
+            criado_em: msg.createdAt
+          });
+          totalSalvas++;
+          console.log(`[DATACRAZY-SYNC] Salva: ${phone} "${msg.body.slice(0, 50)}" (${attendantName})`);
+        } catch (e) {
+          console.error(`[DATACRAZY-SYNC] Falha ao salvar msg de ${phone} (${attendantName}, "${msg.body.slice(0, 30)}"):`, e.message);
+        }
       }
     }
 
