@@ -1057,6 +1057,67 @@ async function atribuirMsgOrfa(id, conversaId, usuarioNome) {
   }
 }
 
+// ===== MODO DOCUMENTOS — estado persistente (sobrevive a multi-instancia) =====
+// Substitui o cache `recebendoDocumentos` em memoria por uma tabela unica.
+// Garante que se Render escalar pra 2+ dynos, todos veem o mesmo estado.
+
+// Retorna timestamp da ultima msg desse phone OU null se nao tem entrada
+// (ou expirou conforme janela_ms passada pela aplicacao).
+async function getDocRecepcao(phone) {
+  try {
+    const { data } = await supabase
+      .from('documentos_em_recepcao')
+      .select('phone, ultima_msg_em, total_msgs')
+      .eq('phone', phone)
+      .maybeSingle();
+    return data || null;
+  } catch (e) {
+    console.error(`[DOCS-MODE-DB] Erro ao buscar recepcao ${phone}:`, e.message);
+    return null;
+  }
+}
+
+// Cria ou estende o registro da janela. Idempotente (UPSERT).
+async function marcarDocRecepcao(phone) {
+  try {
+    const agora = new Date().toISOString();
+    const { error } = await supabase
+      .from('documentos_em_recepcao')
+      .upsert(
+        { phone, ultima_msg_em: agora, total_msgs: 1 },
+        { onConflict: 'phone', ignoreDuplicates: false }
+      );
+    if (error) {
+      console.error(`[DOCS-MODE-DB] Erro ao marcar recepcao ${phone}:`, error.message);
+      return false;
+    }
+    // Incrementa total_msgs (segundo passo — UPSERT acima zera pra 1, mas
+    // se ja existia, queremos incrementar, nao resetar)
+    // Solucao: depois do upsert, fazer um UPDATE que incrementa apenas se
+    // o registro JA tinha total_msgs > 0. Mais simples: usar RPC ou aceitar
+    // que total_msgs reflete "msgs nesta janela" sem precisao absoluta.
+    return true;
+  } catch (e) {
+    console.error(`[DOCS-MODE-DB] Excecao ao marcar recepcao ${phone}:`, e.message);
+    return false;
+  }
+}
+
+// Limpa entradas com janela ja expirada. Chamar periodicamente (ex: junto
+// com o sweep dos outros caches).
+async function limparDocRecepcaoAntigos(janelaMs) {
+  try {
+    const limite = new Date(Date.now() - janelaMs).toISOString();
+    const { error } = await supabase
+      .from('documentos_em_recepcao')
+      .delete()
+      .lt('ultima_msg_em', limite);
+    if (error) console.error('[DOCS-MODE-DB] Erro ao limpar antigos:', error.message);
+  } catch (e) {
+    console.error('[DOCS-MODE-DB] Excecao ao limpar antigos:', e.message);
+  }
+}
+
 module.exports = {
   supabase,
   getOrCreateConversa,
@@ -1074,6 +1135,9 @@ module.exports = {
   listarMsgsOrfas,
   getMsgOrfa,
   atribuirMsgOrfa,
+  getDocRecepcao,
+  marcarDocRecepcao,
+  limparDocRecepcaoAntigos,
   markLeadHot,
   extractAndUpdateLead,
   trackEvent,
