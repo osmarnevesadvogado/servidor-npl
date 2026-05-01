@@ -65,7 +65,7 @@ O CRM frontend (hospedado no GitHub Pages, repositório `npladvs-crm`) chama dir
 
 **leads** — dados dos leads
 - `id`, `nome`, `telefone`, `email`, `escritorio` ('npl'), `instancia`
-- `etapa_funil`: novo → contato → agendamento → documentos → cliente / perdido
+- `etapa_funil`: novo → contato → **follow_up** → agendamento → documentos → cliente / perdido
 - `tese_interesse`, `notas`, `origem`
 - `score` (0-100): scoring automático do lead
 - `score_detalhes`: critérios (ex: "engajado,resposta_rapida,quer_agendar")
@@ -243,6 +243,8 @@ Quando lead em `etapa_funil = 'documentos'` envia arquivo (mídia sem pergunta c
 - Contador usa eventos `followup_Xh` em metricas (não conta msgs programáticas como follow-ups)
 - 72h marca lead como `perdido`
 - Não se aplica a leads em etapa `agendamento`, `documentos`, `cliente` ou `perdido`
+- **Transição automática `contato → follow_up`** (PR #54): ao enviar `followup_2h` sem resposta do lead, etapa muda pra `follow_up`. Permite separar no CRM "leads ativos" vs "aguardando retorno". Recebem todos os follow-ups subsequentes normalmente.
+- **Transição reversa `follow_up → contato`**: assim que lead volta a responder, etapa volta pra `contato` automaticamente. Esquentou de novo.
 - Proteção extra: verifica `consulta_agendada` em metricas antes de enviar
 - **Skip se equipe atendeu manualmente nas últimas 72h**: query nas mensagens com `manual=true, role='assistant'`. Se há, pula a conversa antes mesmo de chamar IA. Cobre cliente em tratativa direta cujo `etapa_funil` ainda não foi marcado como `cliente`.
 - IA tem regra `SKIP_EQUIPE_ATENDENDO` no prompt como camada extra
