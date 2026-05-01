@@ -179,11 +179,11 @@ setInterval(() => {
   if (jaNotificouHot.size > 1000) jaNotificouHot.clear();
   // pendingClienteVerification: limitar a 500 entradas (leads que deram match com cliente mas nunca confirmaram)
   if (pendingClienteVerification.size > 500) pendingClienteVerification.clear();
-  // recebendoDocumentos: remover entradas com janela ja expirada (TTL fora da janela)
-  const agora = Date.now();
-  for (const [phone, ts] of recebendoDocumentos) {
-    if (agora - ts > RECEBENDO_DOCS_JANELA_MS) recebendoDocumentos.delete(phone);
-  }
+  // documentos_em_recepcao: limpar entradas com janela expirada do banco
+  // (estado persistente, sobrevive multi-instancia — substituiu o Map em memoria)
+  db.limparDocRecepcaoAntigos(RECEBENDO_DOCS_JANELA_MS).catch(e =>
+    console.error('[DOCS-MODE-DB] Erro no sweep:', e.message)
+  );
 }, 10 * 60 * 1000);
 
 // ===== CONTROLE DE NOTIFICAÇÃO DE LEAD QUENTE =====
@@ -213,11 +213,10 @@ const agendamentoLock = new Set(); // phones em processo de agendamento
 const primeiroContatoEnviado = new Set();
 
 // ===== MODO DOCUMENTOS (silencioso quando lead esta em fase de envio de docs) =====
-// Cache phone -> timestamp da ultima confirmacao enviada. Se lead em etapa
-// 'documentos' manda mais doc dentro de RECEBENDO_DOCS_JANELA_MS, Laura fica
-// silenciosa (so salva no banco e registra metrica). Se janela expirou, manda
-// nova confirmacao curta. UX: cliente recebe 1 sinal de "tô vendo" e depois cala.
-const recebendoDocumentos = new Map();
+// Janela em que Laura fica silenciosa apos a 1a confirmacao. Estado persistido
+// na tabela `documentos_em_recepcao` (db.getDocRecepcao / db.marcarDocRecepcao)
+// pra sobreviver multi-instancia: se Render escalar pra 2+ dynos, todos veem
+// o mesmo estado. UX: cliente recebe 1 sinal de "tô vendo" e depois cala.
 const RECEBENDO_DOCS_JANELA_MS = 15 * 60 * 1000; // 15 min
 
 // ===== TOGGLE GLOBAL DA LAURA =====
@@ -579,8 +578,11 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
 
       if (ehSoMidia && !ehTextoSignificativo) {
         const cleanP = whatsapp.cleanPhone(phone);
-        const ultimaConfirmacao = recebendoDocumentos.get(cleanP) || 0;
-        const dentroDaJanela = (Date.now() - ultimaConfirmacao) < RECEBENDO_DOCS_JANELA_MS;
+        // Estado persistido em `documentos_em_recepcao` (sobrevive multi-instancia)
+        const recepcao = await db.getDocRecepcao(cleanP);
+        const ultimaConfirmacao = recepcao ? new Date(recepcao.ultima_msg_em).getTime() : 0;
+        const dentroDaJanela = ultimaConfirmacao > 0 &&
+          (Date.now() - ultimaConfirmacao) < RECEBENDO_DOCS_JANELA_MS;
 
         // Salva metrica do documento recebido (auditoria) — sempre.
         // Inclui flag `silencioso`: true se Laura nao respondeu (2a+ na janela),
@@ -598,9 +600,9 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         }
 
         if (dentroDaJanela) {
-          // 2a+ doc na janela — silenciosa
+          // 2a+ doc na janela — silenciosa, so estende o timestamp
           console.log(`[DOCS-MODE] ${phone} em modo documentos — silêncio (msg ${Math.floor((Date.now() - ultimaConfirmacao)/1000)}s apos a 1a)`);
-          recebendoDocumentos.set(cleanP, Date.now()); // estende a janela
+          await db.marcarDocRecepcao(cleanP);
           return;
         } else {
           // 1a doc da janela — confirmacao curta hardcoded (sem chamar Claude — economia)
@@ -611,7 +613,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
           try {
             await whatsapp.sendText(phone, msgConfirmacao, instancia);
             await db.saveMessage(conversa.id, 'assistant', msgConfirmacao);
-            recebendoDocumentos.set(cleanP, Date.now());
+            await db.marcarDocRecepcao(cleanP);
             console.log(`[DOCS-MODE] ${phone} em modo documentos — confirmacao enviada (1a da janela)`);
           } catch (e) {
             console.error(`[DOCS-MODE] Erro ao enviar confirmacao:`, e.message);
@@ -620,9 +622,13 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         }
       }
       // Se chegou aqui (texto significativo em modo documentos), reseta janela e segue
-      // pro flow normal pra Laura responder a pergunta
+      // pro flow normal pra Laura responder a pergunta. Removemos a entrada do banco.
       if (ehTextoSignificativo) {
-        recebendoDocumentos.delete(whatsapp.cleanPhone(phone));
+        try {
+          await db.supabase.from('documentos_em_recepcao').delete().eq('phone', whatsapp.cleanPhone(phone));
+        } catch (e) {
+          console.error(`[DOCS-MODE] Erro ao limpar recepcao:`, e.message);
+        }
       }
     }
 
