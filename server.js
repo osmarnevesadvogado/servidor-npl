@@ -541,6 +541,19 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
     // Salvar mensagem
     await db.saveMessage(conversa.id, 'user', combinedText);
 
+    // Lead em 'follow_up' respondeu — volta pra 'contato' (esquentou de novo).
+    // Transicao reversa que mantem a separacao "ativo vs aguardando retorno"
+    // funcionando sem intervencao manual.
+    if (lead?.etapa_funil === 'follow_up') {
+      try {
+        await db.updateLead(lead.id, { etapa_funil: 'contato' });
+        lead.etapa_funil = 'contato';
+        console.log(`[FUNIL-NPL] ${lead.id} voltou de 'follow_up' pra 'contato' (lead respondeu)`);
+      } catch (e) {
+        console.error(`[FUNIL-NPL] Erro ao reverter ${lead.id} pra contato:`, e.message);
+      }
+    }
+
     // Extrair dados do lead (nome, subtipo trabalhista)
     if (lead) {
       await db.extractAndUpdateLead(lead.id, combinedText);
@@ -1340,6 +1353,16 @@ async function checkFollowUps() {
         console.log(`[FOLLOWUP-NPL-2h] ${conv.telefone} (${nome})`);
         await sendFollowUp(msg, false);
         await db.trackEvent(conv.id, conv.leads?.id, 'followup_2h', nome);
+        // Move lead pra 'follow_up' (esfriando — recebeu 1o follow-up sem responder).
+        // Permite separar no CRM "leads ativos" vs "aguardando retorno".
+        if (conv.leads?.id && (conv.leads.etapa_funil === 'novo' || conv.leads.etapa_funil === 'contato')) {
+          try {
+            await db.updateLead(conv.leads.id, { etapa_funil: 'follow_up' });
+            console.log(`[FUNIL-NPL] ${conv.leads.id} movido para 'follow_up' (1o follow-up sem resposta)`);
+          } catch (e) {
+            console.error(`[FUNIL-NPL] Erro ao mover ${conv.leads.id} pra follow_up:`, e.message);
+          }
+        }
       }
 
       // 2o FOLLOW-UP: 4h sem resposta
@@ -2928,7 +2951,7 @@ app.get('/api/leads/:id', requireApiKey, auditAccess('read', 'lead'), async (req
   }
 });
 
-const ETAPAS_FUNIL_VALIDAS = ['novo', 'contato', 'agendamento', 'documentos', 'cliente', 'perdido'];
+const ETAPAS_FUNIL_VALIDAS = ['novo', 'contato', 'follow_up', 'agendamento', 'documentos', 'cliente', 'perdido'];
 
 app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (req, res) => {
   try {
