@@ -52,11 +52,31 @@ function extrairTempoSaida(texto) {
     const mesNome = m3[1].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
     const ano = parseInt(m3[2]);
     const mesIdx = MESES_PT[mesNome] ?? MESES_PT[mesNome.slice(0, 3)];
-    if (mesIdx != null && ano >= 2000 && ano <= new Date().getFullYear() + 1) {
+    // Aceita anos de 1970 ate ano_atual+1. Antes era >= 2000 — bloqueava
+    // casos antigos: lead que falou "sai em 1989" voltava null (sem alerta),
+    // Laura achava viavel e tentava agendar caso prescrito ha decadas.
+    if (mesIdx != null && ano >= 1970 && ano <= new Date().getFullYear() + 1) {
       const dataSaida = new Date(ano, mesIdx, 15); // dia 15 do mes (meio do mes pra reduzir off-by-one)
       const meses = mesesEntre(dataSaida);
       if (meses >= 0) {
         return { mesesDesdeSaida: meses, trechoOriginal: m3[0], dataSaida: dataSaida.toISOString().slice(0, 10) };
+      }
+    }
+  }
+
+  // "saí em 1989" / "trabalhei até 2010" — apenas ANO, sem mes.
+  // Importante: lead nem sempre lembra do mes, especialmente de saidas
+  // antigas. Sem isso, a Laura achava viavel e tentava agendar caso
+  // prescrito ha decadas. Assume meio do ano (julho) pra calcular.
+  const padraoSoAno = /(?:sa[ií]|parei|me desliguei|me mandaram|me demitiram|fui demitid[oa]|encerrei|trabalhei at[eé]|terminei)\b[^.]{0,30}?\b(?:em\s+|de\s+|no\s+ano\s+de\s+|no\s+ano\s+)?(\d{4})\b/i;
+  const m4 = texto.match(padraoSoAno);
+  if (m4) {
+    const ano = parseInt(m4[1]);
+    if (ano >= 1970 && ano <= new Date().getFullYear() + 1) {
+      const dataSaida = new Date(ano, 6, 1); // julho/1 do ano (meio)
+      const meses = mesesEntre(dataSaida);
+      if (meses >= 0) {
+        return { mesesDesdeSaida: meses, trechoOriginal: m4[0], dataSaida: dataSaida.toISOString().slice(0, 10) };
       }
     }
   }

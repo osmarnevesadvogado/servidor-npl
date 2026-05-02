@@ -905,19 +905,24 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
       }
     }
 
-    // Detectar loop de despedida: se últimas 2 respostas da Laura já foram
-    // despedidas ("até mais", "tenha um otimo"...), pausar a IA automaticamente
-    const ehDespedida = /(até mais|ate mais|tenha um (otimo|ótimo|excelente|bom)|boa sorte|te desejo|obrigada pela paciencia|obrigada pela paciência)/i.test(reply);
+    // Detectar loop de despedida: se a ULTIMA resposta da Laura ja foi despedida,
+    // a proxima nao deve ser outra despedida — Laura tem que calar.
+    // Regex ampliada cobre variacoes que escapavam ("fico a disposicao",
+    // "qualquer coisa estou aqui", "se mudar de ideia me avise", "obrigada").
+    const REGEX_DESPEDIDA = /(at[eé] mais|tenha um (otimo|[óo]timo|excelente|bom|bom dia|boa tarde|boa noite)|boa sorte|te desejo|obrigada pela paci[eê]ncia|fico (a |[àà] )?disposi[cç][aã]o|qualquer coisa.{0,15}(estou aqui|me chama|me avisa)|se mudar de ideia.{0,15}(me avise|me chama|fico)|estou (aqui|por aqui|a disposi[cç][aã]o)|qualquer (coisa|d[uú]vida).{0,20}(me|por aqui)|^\s*obrigada[,.! ]?$|um abra[cç]o|tudo de bom)/i;
+    const ehDespedida = REGEX_DESPEDIDA.test(reply);
     if (ehDespedida) {
       const assistantRecentes = (history || []).filter(m => m.role === 'assistant').slice(-2);
-      const despedidasAnteriores = assistantRecentes.filter(m =>
-        /(até mais|ate mais|tenha um (otimo|ótimo|excelente|bom)|boa sorte|te desejo)/i.test(m.content)
-      );
-      if (despedidasAnteriores.length >= 2) {
-        console.log(`[LOOP-NPL] Loop de despedida detectado para ${phone} — pausando IA 24h`);
+      // Threshold reduzido: se a ULTIMA msg da Laura ja foi despedida,
+      // ja considera loop (em vez de exigir 2 anteriores). Evita serie de 3-4
+      // despedidas seguidas que vinha acontecendo.
+      const ultimaFoiDespedida = assistantRecentes.length > 0 &&
+        REGEX_DESPEDIDA.test(assistantRecentes[assistantRecentes.length - 1].content || '');
+      if (ultimaFoiDespedida) {
+        console.log(`[LOOP-NPL] Loop de despedida detectado para ${phone} — pausando IA 24h (ultima ja era despedida)`);
         pauseAI(phone, 60 * 24); // pausa 24h para não ficar em loop
-        await db.saveMessage(conversa.id, 'assistant', reply);
-        return; // NÃO envia a resposta para o lead
+        // Nao salva nem envia a resposta — lead recebeu despedida na anterior, ja eh
+        return;
       }
     }
 
