@@ -27,8 +27,17 @@ try { aprendizado = require('./aprendizado'); console.log('[INIT-NPL] Aprendizad
 const app = express();
 
 // CORS restrito a origens permitidas
+// Headers/methods explicitos pra garantir compatibilidade com PWA iOS
+// (preflight OPTIONS) — sem isso, request com x-api-key custom pode
+// falhar em alguns navegadores/contextos.
 const corsOptions = config.ALLOWED_ORIGINS
-  ? { origin: config.ALLOWED_ORIGINS.split(',').map(o => o.trim()), credentials: true }
+  ? {
+      origin: config.ALLOWED_ORIGINS.split(',').map(o => o.trim()),
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['x-api-key', 'x-usuario-nome', 'content-type', 'authorization'],
+      maxAge: 600
+    }
   : {};
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
