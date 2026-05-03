@@ -631,7 +631,7 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
           const nome = (lead.nome && !lead.nome.startsWith('WhatsApp') && !/^\+?\(?\d/.test(lead.nome))
             ? lead.nome.split(' ')[0]
             : 'amigo(a)';
-          const msgConfirmacao = `Perfeito, ${nome}! Recebi. Pode mandar os outros documentos que precisar — registro tudo pra equipe.\n\n_Laura — Assistente Virtual (IA) | Escritorio NPL_`;
+          const msgConfirmacao = `Perfeito, ${nome}! Recebi. Pode mandar os outros documentos que precisar — registro tudo pra equipe.\n\n_Laura — Assistente Virtual (IA) | Escritório NPL_`;
           try {
             await whatsapp.sendText(phone, msgConfirmacao, instancia);
             await db.saveMessage(conversa.id, 'assistant', msgConfirmacao);
@@ -784,19 +784,19 @@ async function processBufferedMessage(phone, text, senderName, respondComAudio =
         console.log(`[REPLY-NPL] Primeiro contato — ${phone} reconhecido como CLIENTE CRM, pulando apresentacao generica`);
       } else {
         const msgApresentacao =
-          `Ola! Sou a Laura, assistente virtual (IA) do escritorio Neves Pinheiro Lins, especializado em direitos trabalhistas. ` +
+          `Olá! Sou a Laura, assistente virtual (IA) do escritório Neves Pinheiro Lins, especializado em direitos trabalhistas. ` +
           `Estou aqui pra entender o seu caso e, se fizer sentido, agendar uma consulta gratuita com um dos nossos advogados. ` +
-          `Por ser IA, posso cometer erros — tudo que conversarmos aqui sera revisado e confirmado pelo advogado responsavel na consulta. ` +
-          `Eu nao cuido do caso, apenas faco o primeiro contato.\n\n` +
+          `Por ser IA, posso cometer erros — tudo que conversarmos aqui será revisado e confirmado pelo advogado responsável na consulta. ` +
+          `Eu não cuido do caso, apenas faço o primeiro contato.\n\n` +
           `Qual o seu nome completo?`;
         await whatsapp.sendText(phone, msgApresentacao, instancia);
         await db.saveMessage(conversa.id, 'assistant', msgApresentacao);
 
         const msgCredibilidade =
-          `Enquanto aguardo sua resposta, quero que voce conheca o nosso escritorio. ` +
-          `Ja ajudamos centenas de trabalhadores de todo o pais, principalmente paraenses, a conquistar seus direitos. ` +
+          `Enquanto aguardo sua resposta, quero que você conheça o nosso escritório. ` +
+          `Já ajudamos centenas de trabalhadores de todo o país, principalmente paraenses, a conquistar seus direitos. ` +
           `Somos registrados na OAB com equipe especializada em direito do trabalho.\n\n` +
-          `Conheca nosso escritorio e equipe: https://npladvogados.com.br`;
+          `Conheça nosso escritório e equipe: https://npladvogados.com.br`;
         await whatsapp.sendText(phone, msgCredibilidade, instancia);
         await db.saveMessage(conversa.id, 'assistant', msgCredibilidade);
 
@@ -1362,7 +1362,7 @@ async function checkFollowUps() {
 
       // 1o FOLLOW-UP: 2h sem resposta
       if (!jaEnviou2h && hoursAgo >= 2 && hoursAgo < 6) {
-        const fixo = `${nome}, tudo bem? Ficou com alguma duvida sobre os seus direitos trabalhistas? Estou aqui para te ajudar.`;
+        const fixo = `${nome}, tudo bem? Ficou com alguma dúvida sobre os seus direitos trabalhistas? Estou aqui para te ajudar.`;
         const msg = await getSmartMsg(fixo, 1);
         console.log(`[FOLLOWUP-NPL-2h] ${conv.telefone} (${nome})`);
         await sendFollowUp(msg, false);
@@ -1381,7 +1381,7 @@ async function checkFollowUps() {
 
       // 2o FOLLOW-UP: 4h sem resposta
       if (jaEnviou2h && !jaEnviou4h && hoursAgo >= 4 && hoursAgo < 22) {
-        const fixo = `${nome}, aqui e a Laura do escritorio NPLADVS. Passando para saber se posso te ajudar com a sua situacao trabalhista. Temos horarios disponiveis essa semana e a consulta inicial e sem compromisso.`;
+        const fixo = `${nome}, aqui é a Laura do escritório NPLADVS. Passando para saber se posso te ajudar com a sua situação trabalhista. Temos horários disponíveis essa semana e a consulta inicial é sem compromisso.`;
         const msg = await getSmartMsg(fixo, 2);
         console.log(`[FOLLOWUP-NPL-4h] ${conv.telefone} (${nome})`);
         await sendFollowUp(msg, false);
@@ -1390,7 +1390,7 @@ async function checkFollowUps() {
 
       // 3o FOLLOW-UP: 24h
       if (jaEnviou4h && !jaEnviou24h && hoursAgo >= 24 && hoursAgo < 56) {
-        const fixo = `${nome}, so lembrando que existe um prazo de 2 anos apos sair da empresa para buscar seus direitos trabalhistas. O escritorio NPLADVS pode avaliar o seu caso sem compromisso. Me avisa se tiver interesse.`;
+        const fixo = `${nome}, só lembrando que existe um prazo de 2 anos após sair da empresa para buscar seus direitos trabalhistas. O escritório NPLADVS pode avaliar o seu caso sem compromisso. Me avisa se tiver interesse.`;
         const msg = await getSmartMsg(fixo, 3);
         console.log(`[FOLLOWUP-NPL-24h] ${conv.telefone} (${nome})`);
         await sendFollowUp(msg, false);
@@ -1399,7 +1399,7 @@ async function checkFollowUps() {
 
       // 4o FOLLOW-UP: 72h
       if (jaEnviou24h && !jaEnviou72h && hoursAgo >= 72 && hoursAgo < 120) {
-        const fixo = `${nome}, tudo bem? Aqui e a Laura do escritorio NPLADVS. Essa e a minha ultima mensagem sobre o assunto, nao quero te incomodar. Caso mude de ideia, estamos a disposicao para avaliar os seus direitos. Te desejo tudo de bom.`;
+        const fixo = `${nome}, tudo bem? Aqui é a Laura do escritório NPLADVS. Essa é a minha última mensagem sobre o assunto, não quero te incomodar. Caso mude de ideia, estamos à disposição para avaliar os seus direitos. Te desejo tudo de bom.`;
         const msg = await getSmartMsg(fixo, 4);
         console.log(`[FOLLOWUP-NPL-72h] ${conv.telefone} (${nome})`);
         await sendFollowUp(msg, false);
@@ -1606,9 +1606,9 @@ async function checkLembretesConsulta() {
         await marcarEnviado(chave30min);
         try {
           const msgLembrete = `${consulta.nome}, sua consulta trabalhista com ${tituloPessoa} ${consulta.colaboradora} ` +
-            `comeca em 30 minutos!\n\n` +
-            `O link para a reuniao online sera enviado em instantes.\n\n` +
-            `Escritorio NPLADVS - Estamos te aguardando!`;
+            `começa em 30 minutos!\n\n` +
+            `O link para a reunião online será enviado em instantes.\n\n` +
+            `Escritório NPLADVS - Estamos te aguardando!`;
           await enviarLembrete(msgLembrete);
           console.log(`[LEMBRETE-NPL] Lembrete 30min enviado para ${consulta.nome}`);
         } catch (e) {
@@ -2128,7 +2128,7 @@ app.post('/webhook/zapi', async (req, res) => {
             try {
               await db.trackEvent(conversa.id, null, 'audio_transcricao_falhou', JSON.stringify({ url: url?.slice(0, 100) }));
             } catch (e) { /* metric eh best-effort */ }
-            await whatsapp.sendText(phone, 'Desculpe, nao consegui ouvir seu audio. Pode digitar ou enviar novamente?');
+            await whatsapp.sendText(phone, 'Desculpe, não consegui ouvir seu áudio. Pode digitar ou enviar novamente?');
             return;
           }
 
@@ -3045,10 +3045,10 @@ app.put('/api/leads/:id', requireApiKey, auditAccess('update', 'lead'), async (r
           await db.trackEvent(conversa.id, req.params.id, 'cliente_salvo', `Salvo por ${usuario}`);
 
           const msgPremium =
-            `${nome}, seja muito bem-vindo(a) ao escritorio Neves Pinheiro Lins! ` +
-            `A partir de agora voce tem atendimento prioritario conosco. ` +
-            `Eu continuo aqui pra te ajudar no que precisar, mas se em qualquer momento voce quiser falar diretamente com seu advogado, ` +
-            `e so me avisar que coloco sua conversa em destaque e a equipe te responde o mais rapido possivel.\n\n` +
+            `${nome}, seja muito bem-vindo(a) ao escritório Neves Pinheiro Lins! ` +
+            `A partir de agora você tem atendimento prioritário conosco. ` +
+            `Eu continuo aqui pra te ajudar no que precisar, mas se em qualquer momento você quiser falar diretamente com seu advogado, ` +
+            `é só me avisar que coloco sua conversa em destaque e a equipe te responde o mais rápido possível.\n\n` +
             `Estamos juntos, ${nome}!`;
           await whatsapp.sendText(tel, msgPremium);
           await db.saveMessage(conversa.id, 'assistant', msgPremium);
