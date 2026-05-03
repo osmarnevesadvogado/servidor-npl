@@ -178,8 +178,8 @@ DETECCAO DE SENTIMENTO:
 
 CONTEXTO DE RETORNO:
 Se a secao HISTORICO ANTERIOR estiver presente, o lead ja conversou antes.
-- Demonstre que lembra: "[nome], que bom ter voltado! Da ultima vez conversamos sobre [assunto]."
-- Nao repita perguntas ja respondidas. Retome de onde parou.
+- Retome direto de onde parou, com 1 frase curta de boas-vindas: "[nome], voltei aqui pra continuar com voce!" — depois va direto pra proxima pergunta/acao. NAO resuma o que foi conversado (paráfrase = robotico — regra de TOM E ESTILO).
+- Nao repita perguntas ja respondidas (regra de OURO).
 
 COMO O ESCRITORIO ATUA:
 - O escritorio atua EXCLUSIVAMENTE pela Justica do Trabalho. NAO fazemos contato direto com a empresa do lead.
@@ -196,9 +196,9 @@ PEDIDO DE DEMISSAO — NUNCA ESTIMULAR:
 - Quando o lead diz "nao quero mais ficar" ou "quero sair", NUNCA liste os direitos de quem pede demissao como se fosse vantagem. Sempre contraste com o que ele PERDE e apresente a rescisao indireta como alternativa.
 
 REGRAS DE OURO:
-- NUNCA pergunte algo que ja esta na FICHA DO LEAD
+- NUNCA pergunte algo que o lead JA RESPONDEU OU ESTA NA FICHA. Excecao unica: confirmacao explicita de identidade quando a ficha pede (ex: bloco "cliente_processo_pendente" pede pra perguntar a empresa pra confirmar homonimia — ai SIM voce pergunta).
 - "Certo", "Isso", "Sim", "Ok" = CONFIRMACAO -> avance
-- Nao repita o que a pessoa disse
+- (eco/parafraseamento ja coberto em TOM E ESTILO no topo — nao repita o que o lead disse, va direto a acao)
 - BLOQUEIOS ABSOLUTOS (NUNCA agendar): prescricao >2 anos, prefeitura/governo municipal, lead explicitamente sem interesse
 - IMPORTANTE: vinculo curto (menos de 6 meses) NAO e bloqueio. Explore o caso e OFERECA consulta se o lead quiser — o advogado avalia viabilidade economica
 - Se cair em BLOQUEIO, encerre educadamente. NAO tente convencer.
@@ -212,7 +212,7 @@ EQUIPE DO ESCRITORIO NPLADVS:
 - Estagiaria: Luiza
 
 DETECTAR CLIENTE EXISTENTE — SINAIS QUE INDICAM QUE A PESSOA JA E CLIENTE:
-Se o lead disser qualquer uma dessas coisas, ele JA E CLIENTE. NAO faca triagem:
+Se o lead disser qualquer uma dessas coisas, ele JA E CLIENTE — NAO faca triagem (irrita o cliente):
 - "meu caso ja esta com voces", "meu processo", "meu caso"
 - "alguma novidade?", "como esta o andamento?"
 - "previsao de audiencia", "quando vai ser a audiencia"
@@ -222,11 +222,10 @@ Se o lead disser qualquer uma dessas coisas, ele JA E CLIENTE. NAO faca triagem:
 - Falar em termos que pressupoe processo ja existente (recurso, alvara, execucao, acordo, sentenca, pericia)
 
 QUANDO DETECTAR CLIENTE EXISTENTE:
-1. NUNCA faca triagem (tempo de empresa, carteira, etc). Isso irrita o cliente.
-2. Primeiro, peca o NOME COMPLETO se ainda nao tem (pra poder localizar no sistema)
-3. Depois, responda: "[nome], entendo. Vou acionar o advogado responsavel pelo seu caso pra te dar um retorno. Obrigada pela paciencia!"
-4. Se o cliente tiver NOTA DA EQUIPE na ficha, use pra contextualizar a resposta
-5. O sistema pausa automaticamente
+1. Primeiro, peca o NOME COMPLETO se ainda nao tem (pra poder localizar no sistema)
+2. Depois, responda: "[nome], entendo. Vou acionar o advogado responsavel pelo seu caso pra te dar um retorno. Obrigada pela paciencia!"
+3. Se o cliente tiver NOTA DA EQUIPE na ficha, use pra contextualizar a resposta
+4. O sistema pausa automaticamente
 - NAO tente agendar nada.
 - NAO fique respondendo perguntas juridicas.
 - O sistema vai pausar automaticamente para o advogado atender pelo CRM.
@@ -601,7 +600,7 @@ function buildFichaLead(lead, history, contexto) {
     if (resumo.length > 0) {
       linhas.push(`\nRESUMO DA CONVERSA (ultimas ${resumo.length} mensagens):`);
       linhas.push(resumo.join('\n'));
-      linhas.push(`\nIMPORTANTE: Voce tem o resumo completo acima. NUNCA repita perguntas que voce (Laura) ja fez. NUNCA peca informacoes que o lead ja deu. Retome de onde parou.`);
+      linhas.push(`\n(Use o resumo acima pra nao repetir perguntas — regra completa em REGRAS DE OURO + TOM E ESTILO no topo do prompt.)`);
     }
   }
 
@@ -621,6 +620,34 @@ function buildFichaLead(lead, history, contexto) {
   const temDocumentos = /(documento|contracheque|contrato|comprovante|mensagen|prova|print|foto)/i.test(allTextLeadOnly) && history.length > 4;
   const temAdvogado = /(advogado|advogada|outro advogado|j[aá] procur)/i.test(allTextLeadOnly) && history.length > 4;
 
+  // Detectar se o lead JA MENCIONOU o nome da empresa em alguma msg.
+  // Sem esse tracking, Laura ficava perguntando "qual a empresa?" mesmo
+  // depois do lead ter respondido — info ficava no historico mas nao
+  // estruturada, Haiku perdia em prompts longos. Padroes cobertos:
+  //   "trabalho/trabalhei na X", "empresa X", "era na X", "fui demitido da X",
+  //   "minha empresa eh/foi X", "chama X", "se chama X", "nome da empresa eh X"
+  // X = nome proprio (palavra com inicial maiuscula, 2+ chars, ate 3 palavras).
+  let nomeEmpresaDetectado = null;
+  try {
+    const padroesEmpresa = [
+      /(?:trabalho|trabalhei|trabalhava|estou|estava|fui demitid[oa]|sa[ií]|era|fui)\s+(?:na|no|da|do|de|em|pela?|pelo)\s+([A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}(?:\s+(?:de\s+|da\s+|do\s+|dos\s+|das\s+)?[A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}){0,3})/,
+      /(?:empresa|empregador|firma|loja)\s+(?:se chama|chamada|chamado|chama|eh|[ée]|do\s+nome\s+|chamada\s+de\s+)?\s*([A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}(?:\s+(?:de\s+|da\s+|do\s+|dos\s+|das\s+)?[A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}){0,3})/i,
+      /(?:nome\s+da\s+empresa\s+(?:eh|[ée])|empresa\s+chamada)\s+([A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}(?:\s+(?:de\s+|da\s+|do\s+|dos\s+|das\s+)?[A-ZÀ-Ú][a-zA-ZÀ-Úà-ú&'-]{1,}){0,3})/i
+    ];
+    for (const pat of padroesEmpresa) {
+      const m = allTextLeadOnly.match(pat);
+      if (m && m[1] && m[1].length >= 2 && m[1].length <= 60) {
+        // Filtrar falsos positivos comuns (palavras genericas)
+        const palavrasComuns = /^(um|uma|uns|umas|empresa|firma|loja|escritorio|local|trabalho|servi[çc]o|emprego|esse|essa|aquele|aquela)$/i;
+        if (!palavrasComuns.test(m[1].split(' ')[0])) {
+          nomeEmpresaDetectado = m[1].trim();
+          break;
+        }
+      }
+    }
+  } catch (e) { /* detector frágil é melhor que crash */ }
+  const temEmpresa = !!nomeEmpresaDetectado;
+
   // Detectar menção a advogado da equipe (= cliente existente em tratativa)
   const mencionouEquipe = /(dra\.?\s*luma|luma prince|dra\.?\s*sophia|sophia marineli|dr\.?\s*osmar|osmar neves|dr\.?\s*bruno|bruno pinheiro|dr\.?\s*rodrigo|rodrigo lins|minha advogada|meu advogado|falei com (a |o )?(dra?\.?|advogad)|ta nas maos da|tá nas mãos da|ja sou cliente|já sou cliente|ja fiz consulta|já fiz consulta|meu caso.{0,20}(com voc|com o escrit|no escrit)|meu processo.{0,20}(com voc|com o escrit|no escrit)|andamento.{0,15}(do meu|do processo|do caso)|previs[ãa]o.{0,15}(de audi[eê]ncia|do julgamento)|j[aá] (tive|teve|tivemos|fiz|fizemos).{0,15}(audi[eê]ncia|consulta)|alguma novidade.{0,15}(do meu|do caso|do processo)|como (est[aá]|anda|t[aá]).{0,15}(meu caso|meu processo|o processo|a a[cç][ãa]o))/i.test(allTextLeadOnly);
 
@@ -635,6 +662,7 @@ function buildFichaLead(lead, history, contexto) {
   const eContatoComercial = /(jusbrasil|sou (do|da) (time |equipe |setor )?(comercial|corporativo|vendas)|contato (comercial|corporativo)|solucoes corporativas|soluções corporativas)/i.test(allTextLeadOnly);
 
   const triagemItens = [];
+  if (temEmpresa) triagemItens.push(`empresa: ${nomeEmpresaDetectado}`);
   if (temTempo) triagemItens.push('tempo de trabalho');
   if (temCarteira) triagemItens.push('carteira/registro');
   if (aindaTrabalha) triagemItens.push('ainda empregado (sem risco de prescricao)');
@@ -665,6 +693,7 @@ function buildFichaLead(lead, history, contexto) {
     if (triagemItens.length > 0) {
       linhas.push(`- Ja coletado: ${triagemItens.join(', ')}`);
     }
+    if (!temEmpresa) linhas.push(`- FALTA: nome da empresa onde trabalhava`);
     if (!temTempo) linhas.push(`- FALTA: tempo de trabalho na empresa`);
     if (!temCarteira) linhas.push(`- FALTA: se tinha carteira assinada`);
     if (!temPrazo) linhas.push(`- FALTA: ha quanto tempo saiu da empresa (CRITICO para prazo)`);
@@ -842,7 +871,7 @@ A equipe humana ${quemFalou} esteve atendendo este lead manualmente. Voce esta v
 REGRAS OBRIGATORIAS:
 - NAO se reapresente como Laura. O lead ja conversou — voce esta CONTINUANDO.
 - LEIA TODO o resumo da conversa abaixo pra entender o contexto antes de escrever.
-- NAO refaca triagem (nome, tempo de empresa, carteira, etc) se ja foi conversado.
+- (regra de "nao refazer triagem" ja coberta em REGRAS DE OURO no topo)
 - Reconheca a passagem da equipe pelo atendimento. Algo como: "[nome], voltei aqui pra te ajudar! Vi que voce estava conversando com a nossa equipe sobre [resumo do que foi discutido]. [continua de onde parou ou pergunta o que precisa]"
 - NAO invente o que a equipe falou. Se nao estiver claro no historico, diga "vi que a equipe esteve aqui — em que posso te ajudar agora?"
 - Se a equipe deixou uma pergunta em aberto, PRIORIZE retomar essa pergunta.
